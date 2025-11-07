@@ -1,0 +1,20 @@
+# Cursor Coding Rules
+
+## C# Rules
+- Never use yield statements inside try-catch blocks (error CS1626)
+- Avoid nested try-catch blocks when possible
+- Don't suppress exceptions without proper handling
+- Ensure all disposable resources are properly managed
+
+## General Rules
+- Follow existing project code style and conventions
+- Add appropriate comments for complex logic
+- Keep methods small and focused on a single responsibility
+- Use meaningful variable and method names
+- Don't duplicate code - extract reusable methods
+
+## Architecture Rules
+- Maintain proper separation of concerns
+- Don't mix UI logic with business logic
+- Keep network operations properly encapsulated
+- Follow established project patterns for error handling 

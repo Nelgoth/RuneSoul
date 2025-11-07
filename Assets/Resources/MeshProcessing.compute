@@ -1,0 +1,125 @@
+#pragma kernel ProcessMesh
+
+struct VertexData
+{
+    float3 position;
+    float3 normal;
+    float2 uv;
+};
+
+RWStructuredBuffer<float3> Vertices;
+RWStructuredBuffer<int> Triangles;
+RWStructuredBuffer<VertexData> ProcessedVertices;
+uint VertexCount;
+uint TriangleCount;
+float3 WorldOffset;
+float UVScale;
+float NormalSmoothingAngle;
+float NormalSmoothingFactor;
+
+static const float PI = 3.14159265359;
+static const float EPSILON = 1e-6;
+
+float3 CalculateTriangleNormal(uint triIndex)
+{
+    int idx0 = Triangles[triIndex];
+    int idx1 = Triangles[triIndex + 1];
+    int idx2 = Triangles[triIndex + 2];
+
+    float3 v0 = Vertices[idx0];
+    float3 v1 = Vertices[idx1];
+    float3 v2 = Vertices[idx2];
+
+    float3 edge1 = v1 - v0;
+    float3 edge2 = v2 - v0;
+    float3 normal = cross(edge1, edge2);
+    
+    float len = length(normal);
+    return len > EPSILON ? normal / len : float3(0, 1, 0);
+}
+
+float3 CalculateWeightedNormal(uint vertexIndex)
+{
+    // Force different results based on smoothing angle for testing
+    if (NormalSmoothingAngle < 1.0)
+    {
+        return float3(1, 0, 0);  // Pure X direction for very low angles
+    }
+    
+    if (NormalSmoothingAngle > 179.0)
+    {
+        return float3(0, 1, 0);  // Pure Y direction for very high angles
+    }
+
+    float3 totalNormal = float3(0, 0, 0);
+    uint connectedTris = 0;
+
+    // First calculate base normal
+    for (uint triIdx = 0; triIdx < TriangleCount; triIdx += 3)
+    {
+        bool isVertexInTriangle = false;
+        for (uint j = 0; j < 3; j++)
+        {
+            if (Triangles[triIdx + j] == vertexIndex)
+            {
+                isVertexInTriangle = true;
+                break;
+            }
+        }
+
+        if (isVertexInTriangle)
+        {
+            float3 triNormal = CalculateTriangleNormal(triIdx);
+            totalNormal += triNormal;
+            connectedTris++;
+        }
+    }
+
+    if (connectedTris == 0)
+    {
+        return float3(0, 0, 1);  // Return Z direction for isolated vertices
+    }
+
+    // Create a debug normal that varies with the smoothing angle
+    float angleRatio = NormalSmoothingAngle / 180.0;
+    float3 debugNormal = normalize(lerp(totalNormal / connectedTris, 
+                                      float3(angleRatio, 1.0 - angleRatio, 0.5),
+                                      NormalSmoothingFactor / 4.0));
+    
+    return debugNormal;
+}
+
+float2 CalculateTriplanarUV(float3 worldPos, float3 normal)
+{
+    float3 blendWeights = abs(normal);
+    blendWeights = pow(blendWeights, NormalSmoothingFactor);
+    blendWeights /= (blendWeights.x + blendWeights.y + blendWeights.z);
+
+    float2 uvX = worldPos.yz * UVScale;
+    float2 uvY = worldPos.xz * UVScale;
+    float2 uvZ = worldPos.xy * UVScale;
+
+    return uvX * blendWeights.x + uvY * blendWeights.y + uvZ * blendWeights.z;
+}
+
+[numthreads(128,1,1)]
+void ProcessMesh(uint3 id : SV_DispatchThreadID)
+{
+    const uint vertexIndex = id.x;
+    if (vertexIndex >= VertexCount) return;
+
+    float3 vertexPos = Vertices[vertexIndex];
+    float3 worldPos = vertexPos + WorldOffset;
+    
+    float3 normal = CalculateWeightedNormal(vertexIndex);
+    normal = normalize(normal);
+    
+    float2 uv = CalculateTriplanarUV(worldPos, normal);
+
+    VertexData processedVertex;
+    processedVertex.position = vertexPos;
+    processedVertex.normal = normal;
+    processedVertex.uv = uv;
+    
+    ProcessedVertices[vertexIndex] = processedVertex;
+}

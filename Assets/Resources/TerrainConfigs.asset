@@ -1,0 +1,52 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a680b96d90e42424fb006db047d94f49, type: 3}
+  m_Name: TerrainConfigs
+  m_EditorClassIdentifier: 
+  chunkSize: 16
+  voxelSize: 1
+  surfaceLevel: 0
+  initialMeshPoolSize: 50
+  meshVertexBufferSize: 10000
+  MaxMeshCacheSize: 268435456
+  memoryPressureThreshold: 0.8
+  targetMemoryUsage: 0.5
+  LoadRadius: 30
+  UnloadRadius: 33
+  VerticalLoadRadius: 5
+  VerticalUnloadRadius: 6
+  ChunksPerFrame: 100
+  ChunksPerFrameUnloading: 100
+  maxHeight: 64
+  noiseSeed: 1234
+  noiseScale: 0.015
+  frequency: 0.015
+  MaxJobRetries: 3
+  densityInfluenceRadius: 3.5
+  baseDensityStrength: 3
+  minDensityChangeThreshold: 0.01
+  updateInterval: 0.1
+  voxelEpsilon: 0.01
+  densityFalloffCutoff: 0.1
+  modificationRange: 10
+  normalSmoothingAngle: 120
+  normalSmoothingFactor: 2.5
+  minTriangleArea: 0.000001
+  maxMeshBoundsMagnitude: 10000
+  MaxConcurrentJobs: 8
+  MeshBatchSize: 64
+  TargetFPS: 60
+  VoxelMaterial: {fileID: 2100000, guid: 5f9d66e7a96d95b498bd00489fc76ebb, type: 2}
+  triplanarScale: 1
+  triplanarBlend: 1
+  AnalysisCacheExpirationDays: 30
+  PermanentlyStoreEmptyChunks: 1
