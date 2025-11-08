@@ -25,7 +25,6 @@ MonoBehaviour:
   VerticalLoadRadius: 5
   VerticalUnloadRadius: 6
   ChunksPerFrame: 100
-  ChunksPerFrameUnloading: 100
   maxHeight: 64
   noiseSeed: 1234
   noiseScale: 0.015

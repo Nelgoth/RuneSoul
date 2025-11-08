@@ -572,6 +572,29 @@ public class GameUIManager : MonoBehaviour
         if (loadingProgressBar) loadingProgressBar.value = progress;
     }
     
+    public void SetGameplayLoadingOverlay(bool visible, float progress, string status)
+    {
+        if (loadingContainer)
+        {
+            loadingContainer.SetActive(visible);
+        }
+
+        if (!visible)
+        {
+            return;
+        }
+
+        if (loadingStatusText)
+        {
+            loadingStatusText.text = status;
+        }
+
+        if (loadingProgressBar)
+        {
+            loadingProgressBar.value = Mathf.Clamp01(progress);
+        }
+    }
+    
     private void ShowErrorPanel(string errorMessage)
     {
         // Don't hide all panels here, just make sure the error panel is on top

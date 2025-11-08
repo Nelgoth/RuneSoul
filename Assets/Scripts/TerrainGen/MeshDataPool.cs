@@ -204,17 +204,54 @@ public class MeshDataPool : MonoBehaviour
 
     public int GetDynamicChunksPerFrame()
     {
-        float memoryPressure = (float)currentMemoryUsage / maxMemoryBytes;
-        float frameTimePressure;
+        if (World.Instance == null || World.Instance.Config == null)
+        {
+            return 16;
+        }
+
+        if (World.Instance.IsInitialLoadInProgress)
+        {
+            return Mathf.Max(1, World.Instance.InitialLoadChunkBudget);
+        }
+
+        int baseChunks = Mathf.Max(1, World.Instance.Config.ChunksPerFrame);
+
+        float averagedFrameTime;
         lock (frameTimeHistory)
         {
-            frameTimePressure = Mathf.InverseLerp(0.016f, 0.05f, averageFrameTime);
+            averagedFrameTime = averageFrameTime > 0f ? averageFrameTime : Time.deltaTime;
         }
-        
-        int baseChunks = World.Instance.Config.ChunksPerFrame;
-        float pressureMultiplier = Mathf.Lerp(1.5f, 0.5f, Mathf.Max(memoryPressure, frameTimePressure));
-        
-        return Mathf.Max(1, Mathf.RoundToInt(baseChunks * pressureMultiplier));
+
+        float fps = averagedFrameTime > 1e-4f ? 1f / averagedFrameTime : 0f;
+        int adjusted = baseChunks;
+
+        if (fps < 40f)
+        {
+            float scale = Mathf.InverseLerp(15f, 40f, Mathf.Clamp(fps, 15f, 40f));
+            float multiplier = Mathf.Lerp(0.3f, 1f, scale);
+            adjusted = Mathf.Max(4, Mathf.RoundToInt(baseChunks * multiplier));
+        }
+
+        if (fps < 25f)
+        {
+            adjusted = Mathf.Min(adjusted, Mathf.Max(2, Mathf.RoundToInt(baseChunks * 0.35f)));
+        }
+
+        if (fps < 18f)
+        {
+            adjusted = Mathf.Min(adjusted, Mathf.Max(1, Mathf.RoundToInt(baseChunks * 0.2f)));
+        }
+
+        long maxBytes = Math.Max(1L, maxMemoryBytes);
+        float memoryPressure = maxBytes > 0 ? (float)currentMemoryUsage / maxBytes : 0f;
+        if (memoryPressure > World.Instance.Config.memoryPressureThreshold)
+        {
+            float pressureScale = Mathf.InverseLerp(World.Instance.Config.memoryPressureThreshold, 1f, Mathf.Clamp01(memoryPressure));
+            adjusted = Mathf.Max(1, Mathf.RoundToInt(adjusted * Mathf.Lerp(1f, 0.5f, pressureScale)));
+        }
+
+        int upperBound = Mathf.Max(baseChunks, World.Instance.InitialLoadChunkBudget);
+        return Mathf.Clamp(adjusted, 1, upperBound);
     }
 
     private void ProcessDisposalQueue()

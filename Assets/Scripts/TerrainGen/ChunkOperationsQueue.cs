@@ -180,6 +180,11 @@ public class ChunkOperationsQueue : MonoBehaviour
         );
 
         EnqueueOperation(operation);
+
+        if (World.Instance != null)
+        {
+            World.Instance.OnInitialChunkLoadQueued(chunkCoord);
+        }
     }
 
     private void RemoveExistingLoadRequest(Vector3Int chunkCoord)
@@ -360,6 +365,11 @@ public class ChunkOperationsQueue : MonoBehaviour
     {
         // Start with the config default
         int baseLimit = MeshDataPool.Instance.GetDynamicChunksPerFrame();
+
+        if (World.Instance != null && World.Instance.IsInitialLoadInProgress)
+        {
+            return Mathf.Max(1, World.Instance.InitialLoadChunkBudget);
+        }
         
         // Check memory pressure
         float memoryPressure = (float)MeshDataPool.Instance.GetCurrentMemoryUsage() / 

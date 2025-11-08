@@ -31,7 +31,6 @@ public class TerrainConfigs : ScriptableObject
     public int VerticalUnloadRadius = 3;
     [Tooltip("Dynamic chunks processed per frame")]
     public int ChunksPerFrame = 1;
-    public int ChunksPerFrameUnloading = 1;
 
     [Header("Generation")]
     [Tooltip("Base terrain height")]

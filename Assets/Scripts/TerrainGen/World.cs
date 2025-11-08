@@ -75,6 +75,10 @@ public class World : MonoBehaviour
     public int verticalLoadRadius => Config.VerticalLoadRadius;
     public int verticalUnloadRadius => Config.VerticalUnloadRadius;
     public int chunksPerFrame => MeshDataPool.Instance.GetDynamicChunksPerFrame();
+    public bool IsInitialLoadInProgress => initialLoadInProgress;
+    public bool IsInitialLoadComplete => !initialLoadInProgress;
+    public float InitialLoadProgress => initialLoadProgress;
+    public int InitialLoadChunkBudget => initialLoadMaxChunksPerFrame;
     #endregion
 
     #region Private Fields
@@ -115,6 +119,14 @@ public class World : MonoBehaviour
     private HashSet<Vector3Int> activeChunkCoords = new HashSet<Vector3Int>();
     private float lastGlobalChunkUpdateTime = 0f;
     [SerializeField] public GameObject chunkPrefab;
+    [Header("Initial Load")]
+    [SerializeField] private int initialLoadMaxChunksPerFrame = 256;
+    private bool initialLoadInProgress = true;
+    private float initialLoadProgress = 0f;
+    private readonly HashSet<Vector3Int> initialLoadTargets = new HashSet<Vector3Int>();
+    private readonly HashSet<Vector3Int> initialLoadPending = new HashSet<Vector3Int>();
+    private float initialLoadStartTime = -1f;
+    private bool initialLoadCompletionBroadcasted = false;
     private class ChunkUnloadCandidate
     {
         public Vector3Int chunkCoord;
@@ -356,6 +368,8 @@ public class World : MonoBehaviour
         // Cache the operations queue reference
         operationsQueue = ChunkOperationsQueue.Instance;
 
+        ResetInitialLoadTracking();
+
         // Initialize with default coordinates if needed
         if (lastPlayerChunkCoordinates == Vector3Int.zero)
         {
@@ -467,6 +481,11 @@ public class World : MonoBehaviour
             }
         }
 
+        if (initialLoadInProgress)
+        {
+            UpdateInitialLoadUI();
+        }
+
         // Process operations in order
         operationsQueue.ProcessOperations();
         
@@ -542,18 +561,24 @@ public class World : MonoBehaviour
         RecalculateActiveChunks();
         
         // Get dynamic counts based on the configured value and current state
-        int dynamicChunksPerFrame = MeshDataPool.Instance.GetDynamicChunksPerFrame();
+        int dynamicChunksPerFrame = Mathf.Max(1, MeshDataPool.Instance.GetDynamicChunksPerFrame());
         
         // Adjust load processing count based on configuration
-        int loadChunksPerUpdate = Mathf.Max(5, dynamicChunksPerFrame);
+        int loadChunksPerUpdate = dynamicChunksPerFrame;
         
         // For unloading, make it more aggressive if we have many chunks
-        int baseUnloadPerUpdate = Mathf.Max(5, dynamicChunksPerFrame); 
-        int additionalUnloads = Mathf.FloorToInt((chunks.Count - activeChunkCoords.Count) / 20f);
+        int additionalUnloads = Mathf.Max(0, Mathf.FloorToInt((chunks.Count - activeChunkCoords.Count) / 20f));
+        int baseUnloadPerUpdate = Mathf.Max(0, Mathf.RoundToInt(dynamicChunksPerFrame * 0.75f));
         int unloadChunksPerUpdate = baseUnloadPerUpdate + additionalUnloads;
         
-        // Cap to reasonable limits to avoid stuttering
-        unloadChunksPerUpdate = Mathf.Clamp(unloadChunksPerUpdate, 5, 25);
+        if (IsInitialLoadInProgress)
+        {
+            unloadChunksPerUpdate = 0;
+        }
+        else
+        {
+            unloadChunksPerUpdate = Mathf.Clamp(unloadChunksPerUpdate, 1, Mathf.Max(loadChunksPerUpdate, 64));
+        }
         
         // Process chunk loading
         ProcessActiveChunksLoading(loadChunksPerUpdate);
@@ -574,6 +599,11 @@ public class World : MonoBehaviour
     private void ProcessServerChunkUnloading(int maxUnloadsPerCall)
     {
         if (!NetworkManager.Singleton.IsServer) return;
+
+        if (maxUnloadsPerCall <= 0)
+        {
+            return;
+        }
         
         // Make a deterministic ordering of chunks to unload
         List<ChunkUnloadCandidate> unloadCandidates = new List<ChunkUnloadCandidate>();
@@ -624,11 +654,11 @@ public class World : MonoBehaviour
         // Sort by priority (highest first)
         unloadCandidates.Sort((a, b) => b.priority.CompareTo(a.priority));
         
-        // Limit unloads per call, but ensure we handle at least some
-        int maxUnloads = Mathf.Max(1, Mathf.Min(unloadCandidates.Count, maxUnloadsPerCall));
+        // Limit unloads per call
+        int maxUnloads = Mathf.Clamp(maxUnloadsPerCall, 0, unloadCandidates.Count);
         int unloadCount = 0;
         
-        for (int i = 0; i < unloadCandidates.Count && i < maxUnloads; i++)
+        for (int i = 0; i < unloadCandidates.Count && unloadCount < maxUnloads; i++)
         {
             operationsQueue.QueueChunkForUnload(unloadCandidates[i].chunkCoord);
             unloadCount++;
@@ -902,6 +932,102 @@ public class World : MonoBehaviour
             Debug.Log($"Active chunks recalculated: {activeChunkCoords.Count} active chunks for {playerChunkCoordinates.Count} players");
         }
     }
+
+    #region Initial Load Tracking
+    private void ResetInitialLoadTracking()
+    {
+        initialLoadInProgress = true;
+        initialLoadProgress = 0f;
+        initialLoadTargets.Clear();
+        initialLoadPending.Clear();
+        initialLoadStartTime = Time.time;
+        initialLoadCompletionBroadcasted = false;
+        UpdateInitialLoadUI("Preparing terrain...");
+    }
+
+    public void OnInitialChunkLoadQueued(Vector3Int chunkCoord)
+    {
+        if (!initialLoadInProgress)
+            return;
+
+        if (initialLoadTargets.Add(chunkCoord))
+        {
+            initialLoadPending.Add(chunkCoord);
+            UpdateInitialLoadProgressState();
+        }
+    }
+
+    private void HandleInitialLoadChunkReady(Vector3Int chunkCoord)
+    {
+        if (!initialLoadInProgress)
+            return;
+
+        if (initialLoadPending.Remove(chunkCoord))
+        {
+            UpdateInitialLoadProgressState();
+        }
+    }
+
+    private void UpdateInitialLoadProgressState()
+    {
+        if (!initialLoadInProgress)
+            return;
+
+        int total = initialLoadTargets.Count;
+        if (total <= 0)
+        {
+            initialLoadProgress = 0f;
+            UpdateInitialLoadUI();
+            return;
+        }
+
+        initialLoadProgress = Mathf.Clamp01(1f - (initialLoadPending.Count / (float)total));
+        UpdateInitialLoadUI();
+
+        if (initialLoadPending.Count == 0 && total > 0)
+        {
+            CompleteInitialLoad();
+        }
+    }
+
+    private void CompleteInitialLoad()
+    {
+        if (!initialLoadInProgress)
+            return;
+
+        initialLoadInProgress = false;
+        initialLoadProgress = 1f;
+
+        if (!initialLoadCompletionBroadcasted)
+        {
+            initialLoadCompletionBroadcasted = true;
+            float elapsed = initialLoadStartTime > 0f ? Time.time - initialLoadStartTime : 0f;
+            Debug.Log($"Initial world load completed in {elapsed:F1}s ({initialLoadTargets.Count} chunks).");
+        }
+
+        UpdateInitialLoadUI("World ready");
+    }
+
+    private void UpdateInitialLoadUI(string statusOverride = null)
+    {
+        if (GameUIManager.Instance == null)
+            return;
+
+        bool show = initialLoadInProgress;
+        string status = statusOverride;
+
+        if (string.IsNullOrEmpty(status))
+        {
+            int loaded = initialLoadTargets.Count - initialLoadPending.Count;
+            int total = initialLoadTargets.Count;
+            status = total > 0
+                ? $"Loading terrain {loaded}/{total}"
+                : "Preparing terrain...";
+        }
+
+        GameUIManager.Instance.SetGameplayLoadingOverlay(show, initialLoadProgress, status);
+    }
+    #endregion
 
     #region Density Handling
     private Vector3Int TranslatePositionToChunk(Vector3 worldPos, Vector3Int targetChunkCoord)
@@ -2137,6 +2263,8 @@ public class World : MonoBehaviour
             Debug.LogWarning($"Chunk {chunkCoord} completed generation but is in unexpected state: {state.Status}");
         }
 
+        HandleInitialLoadChunkReady(chunkCoord);
+
         if (EnhancedBenchmarkManager.Instance != null)
         {
             EnhancedBenchmarkManager.Instance.EndOperation(chunkCoord);
@@ -2527,6 +2655,12 @@ public class World : MonoBehaviour
         {
             chunk.CompleteAllJobs();
             ClearPendingUpdates(chunkCoord);
+        }
+
+        if (initialLoadPending.Remove(chunkCoord))
+        {
+            Debug.LogWarning($"Removing chunk {chunkCoord} from initial load pending set due to failure.");
+            UpdateInitialLoadProgressState();
         }
 
         QuarantineChunk(chunkCoord, 
