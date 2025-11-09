@@ -334,15 +334,18 @@ public class ChunkOperationsQueue : MonoBehaviour
         // Calculate dynamic operations limit based on frame time
         int maxOpsThisFrame = CalculateDynamicOperationsLimit();
         int opsProcessed = 0;
+        bool prioritizeInitialEmptyUnloads = World.Instance != null && World.Instance.IsInitialLoadUnloadingEmptyChunks;
 
         // Process critical operations first
         opsProcessed = ProcessOperationsForPriority(OperationPriority.Critical, opsProcessed, maxOpsThisFrame);
         if (opsProcessed >= maxOpsThisFrame) return;
 
         // Process a minimal set of unloads to free resources (max 2 per frame)
-        int unloadsToProcess = Mathf.Min(2, maxOpsThisFrame - opsProcessed);
+        int unloadsToProcess = prioritizeInitialEmptyUnloads
+            ? Mathf.Max(1, maxOpsThisFrame - opsProcessed)
+            : Mathf.Min(2, maxOpsThisFrame - opsProcessed);
         opsProcessed += ProcessUnloadOperations(unloadsToProcess);
-        if (opsProcessed >= maxOpsThisFrame) return;
+        if (opsProcessed >= maxOpsThisFrame || prioritizeInitialEmptyUnloads) return;
 
         // Process remaining operations by priority, with lower limits per priority
         var remainingOps = maxOpsThisFrame - opsProcessed;
@@ -640,6 +643,12 @@ public class ChunkOperationsQueue : MonoBehaviour
         {
             if (!World.Instance.TryGetChunk(chunkCoord, out Chunk chunk))
             {
+                if (World.Instance.NotifyInitialEmptyChunkUnloaded(chunkCoord))
+                {
+                    unloadingChunks.Remove(chunkCoord);
+                    return true;
+                }
+
                 Debug.LogWarning($"[ChunkQueue] Cannot unload chunk {chunkCoord} - not found");
                 return false;
             }
@@ -678,6 +687,7 @@ public class ChunkOperationsQueue : MonoBehaviour
                 ChunkConfigurations.ChunkStatus.Unloaded,
                 ChunkConfigurations.ChunkStateFlags.None))
             {
+                World.Instance.NotifyInitialEmptyChunkUnloaded(chunkCoord);
                 unloadingChunks.Remove(chunkCoord);
                 return true;
             }
