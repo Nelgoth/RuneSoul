@@ -209,12 +209,14 @@ public class MeshDataPool : MonoBehaviour
             return 16;
         }
 
+        var config = World.Instance.Config;
+
         if (World.Instance.IsInitialLoadInProgress)
         {
-            return Mathf.Max(1, World.Instance.InitialLoadChunkBudget);
+            return Mathf.Max(config.minChunksPerFrame, config.GetInitialLoadChunkBudget());
         }
 
-        int baseChunks = Mathf.Max(1, World.Instance.Config.ChunksPerFrame);
+        int baseChunks = Mathf.Max(config.minChunksPerFrame, config.ChunksPerFrame);
 
         float averagedFrameTime;
         lock (frameTimeHistory)
@@ -225,33 +227,43 @@ public class MeshDataPool : MonoBehaviour
         float fps = averagedFrameTime > 1e-4f ? 1f / averagedFrameTime : 0f;
         int adjusted = baseChunks;
 
-        if (fps < 40f)
-        {
-            float scale = Mathf.InverseLerp(15f, 40f, Mathf.Clamp(fps, 15f, 40f));
-            float multiplier = Mathf.Lerp(0.3f, 1f, scale);
-            adjusted = Mathf.Max(4, Mathf.RoundToInt(baseChunks * multiplier));
-        }
+        float targetFps = Mathf.Max(10f, config.chunkProcessingTargetFPS);
+        float minimumFps = Mathf.Clamp(config.chunkProcessingMinimumFPS, 1f, targetFps - 1f);
 
-        if (fps < 25f)
+        if (fps >= targetFps)
         {
-            adjusted = Mathf.Min(adjusted, Mathf.Max(2, Mathf.RoundToInt(baseChunks * 0.35f)));
+            float extraFps = fps - targetFps;
+            if (extraFps > 10f)
+            {
+                float boost = Mathf.Clamp01(extraFps / targetFps);
+                adjusted = Mathf.RoundToInt(baseChunks * Mathf.Lerp(1f, 1.35f, boost));
+            }
+            else
+            {
+                adjusted = baseChunks;
+            }
         }
-
-        if (fps < 18f)
+        else if (fps > minimumFps)
         {
-            adjusted = Mathf.Min(adjusted, Mathf.Max(1, Mathf.RoundToInt(baseChunks * 0.2f)));
+            float normalized = Mathf.InverseLerp(minimumFps, targetFps, fps);
+            float curve = Mathf.Pow(normalized, 3f); // even stronger falloff as fps drops
+            adjusted = Mathf.RoundToInt(Mathf.Lerp(config.minChunksPerFrame, baseChunks, curve));
+        }
+        else
+        {
+            adjusted = config.minChunksPerFrame;
         }
 
         long maxBytes = Math.Max(1L, maxMemoryBytes);
         float memoryPressure = maxBytes > 0 ? (float)currentMemoryUsage / maxBytes : 0f;
-        if (memoryPressure > World.Instance.Config.memoryPressureThreshold)
+        if (memoryPressure > config.memoryPressureThreshold)
         {
-            float pressureScale = Mathf.InverseLerp(World.Instance.Config.memoryPressureThreshold, 1f, Mathf.Clamp01(memoryPressure));
-            adjusted = Mathf.Max(1, Mathf.RoundToInt(adjusted * Mathf.Lerp(1f, 0.5f, pressureScale)));
+            float pressureScale = Mathf.InverseLerp(config.memoryPressureThreshold, 1f, Mathf.Clamp01(memoryPressure));
+            adjusted = Mathf.Max(config.minChunksPerFrame, Mathf.RoundToInt(adjusted * Mathf.Lerp(1f, 0.5f, pressureScale)));
         }
 
-        int upperBound = Mathf.Max(baseChunks, World.Instance.InitialLoadChunkBudget);
-        return Mathf.Clamp(adjusted, 1, upperBound);
+        int upperBound = Mathf.Max(config.minChunksPerFrame, baseChunks);
+        return Mathf.Clamp(adjusted, config.minChunksPerFrame, upperBound);
     }
 
     private void ProcessDisposalQueue()

@@ -205,6 +205,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   config: {fileID: 11400000, guid: 6b7465cbac917d142b17aa4db88f15e8, type: 2}
   chunkPrefab: {fileID: 8934827051055099686, guid: a74d91afa1a7c32438e1a4306a6deecc, type: 3}
+  initialLoadMaxChunksPerFrame: 256
 --- !u!4 &355491380
 Transform:
   m_ObjectHideFlags: 0
@@ -607,7 +608,7 @@ MonoBehaviour:
   playerPositionKey: PlayerPosition
   autoRegisterWithNetworkManager: 1
   prioritizeSpawnTerrainLoading: 1
-  showDebugLogs: 1
+  showDebugLogs: 0
 --- !u!4 &769545738
 Transform:
   m_ObjectHideFlags: 0

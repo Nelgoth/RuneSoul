@@ -371,7 +371,7 @@ public class ChunkOperationsQueue : MonoBehaviour
 
         if (World.Instance != null && World.Instance.IsInitialLoadInProgress)
         {
-            return Mathf.Max(1, World.Instance.InitialLoadChunkBudget);
+            return Mathf.Max(World.Instance.Config.minChunksPerFrame, World.Instance.InitialLoadChunkBudget);
         }
         
         // Check memory pressure
@@ -380,14 +380,15 @@ public class ChunkOperationsQueue : MonoBehaviour
         
         // Get framerate information
         float frameTime = Time.unscaledDeltaTime;
-        float targetFrameTime = 1f / World.Instance.Config.TargetFPS;
+        float targetFPS = Mathf.Max(10f, World.Instance.Config.chunkProcessingTargetFPS);
+        float targetFrameTime = 1f / targetFPS;
         float frameTimePressure = Mathf.Clamp01(frameTime / (targetFrameTime * 2f));
         
         // Calculate the scaling factor - reduce work under pressure
         float scaleFactor = 1f - Mathf.Max(memoryPressure * 0.8f, frameTimePressure * 0.7f);
         
         // Ensure at least 1 operation and no more than config value
-        return Mathf.Clamp(Mathf.RoundToInt(baseLimit * scaleFactor), 1, baseLimit);
+        return Mathf.Clamp(Mathf.RoundToInt(baseLimit * scaleFactor), World.Instance.Config.minChunksPerFrame, baseLimit);
     }
 
     private int ProcessOperationsForPriority(OperationPriority priority, int opsProcessed, int maxOps)

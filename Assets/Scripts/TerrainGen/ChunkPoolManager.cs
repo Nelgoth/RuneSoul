@@ -8,20 +8,22 @@ using System.Linq;
 public class ChunkPoolManager : MonoBehaviour {
     public static ChunkPoolManager Instance { get; private set; }
     public bool IsInitialized { get; private set; }
-    private Queue<Chunk> chunkPool = new Queue<Chunk>();
     private Stack<Chunk> availableChunks = new Stack<Chunk>();
     private Transform poolContainer;
-    public int initialPoolSize = 10;
+    private GameObject chunkTemplate;
 
     private void Awake()
     {
-        Debug.Log($"[ChunkPool] Awake called, initialPoolSize: {initialPoolSize}");
         if (Instance != null && Instance != this)
         {
             Destroy(gameObject);
             return;
         }
         Instance = this;
+
+        chunkTemplate = DetermineChunkPrefab();
+        int initialPoolSize = DetermineInitialPoolSize();
+        Debug.Log($"[ChunkPool] Awake called, initialPoolSize: {initialPoolSize}");
 
         // Subscribe to scene unload event
         UnityEngine.SceneManagement.SceneManager.sceneUnloaded += OnSceneUnloaded;
@@ -31,19 +33,79 @@ public class ChunkPoolManager : MonoBehaviour {
         poolContainer.SetParent(transform, false);
         
         // Create initial pool
-        for (int i = 0; i < initialPoolSize; i++)
-        {
-            GameObject chunkObject = new GameObject($"PooledChunk_{i}");
-            // Put it under the poolContainer
-            chunkObject.transform.SetParent(poolContainer, false);
-            chunkObject.SetActive(false);
-
-            // Minimal components: only a `Chunk`
-            Chunk newChunk = chunkObject.AddComponent<Chunk>();
-            availableChunks.Push(newChunk);
-        }
+        CreateInitialChunks(initialPoolSize);
 
         IsInitialized = true;
+    }
+
+    private TerrainConfigs GetTerrainConfigs()
+    {
+        if (World.Instance != null && World.Instance.Config != null)
+            return World.Instance.Config;
+
+        World world = FindObjectOfType<World>();
+        return world != null ? world.Config : null;
+    }
+
+    private int DetermineInitialPoolSize()
+    {
+        TerrainConfigs configs = GetTerrainConfigs();
+        if (configs != null)
+        {
+            return configs.GetInitialChunkPoolSize();
+        }
+        return 100;
+    }
+
+    private GameObject DetermineChunkPrefab()
+    {
+        World world = World.Instance != null ? World.Instance : FindObjectOfType<World>();
+        if (world != null && world.chunkPrefab != null)
+        {
+            return world.chunkPrefab;
+        }
+        return null;
+    }
+
+    private void CreateInitialChunks(int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            Chunk chunk = CreateChunkInstance(i);
+            if (chunk != null)
+            {
+                availableChunks.Push(chunk);
+            }
+        }
+    }
+
+    private Chunk CreateChunkInstance(int index = -1)
+    {
+        GameObject chunkObject;
+        if (chunkTemplate != null)
+        {
+            chunkObject = Instantiate(chunkTemplate, poolContainer);
+            chunkObject.name = index >= 0 ? $"PooledChunk_{index}" : $"PooledChunk_{Guid.NewGuid()}";
+        }
+        else
+        {
+            chunkObject = new GameObject(index >= 0 ? $"PooledChunk_{index}" : "PooledChunk");
+            chunkObject.transform.SetParent(poolContainer, false);
+            chunkObject.AddComponent<Chunk>();
+        }
+
+        chunkObject.transform.SetParent(poolContainer, false);
+        chunkObject.SetActive(false);
+
+        InitializeChunk(chunkObject);
+
+        Chunk chunk = chunkObject.GetComponent<Chunk>();
+        if (chunk == null)
+        {
+            chunk = chunkObject.AddComponent<Chunk>();
+        }
+
+        return chunk;
     }
 
 
@@ -105,21 +167,7 @@ public class ChunkPoolManager : MonoBehaviour {
         if (chunk == null)
         {
             Debug.Log("Creating new chunk as none available in pool");
-            // This must come from your chunkPrefab if you have one,
-            // or a plain GameObject with a Chunk script
-            GameObject chunkObject = Instantiate(World.Instance.chunkPrefab);
-
-            // Make sure it's under poolContainer
-            chunkObject.transform.SetParent(poolContainer, false);
-            chunkObject.SetActive(false);
-
-            chunk = chunkObject.GetComponent<Chunk>();
-            if (chunk == null)
-            {
-                Debug.LogError("Failed to get Chunk component");
-                Destroy(chunkObject);
-                return null;
-            }
+            chunk = CreateChunkInstance();
         }
 
         // Ensure it's under poolContainer, inactive
@@ -254,7 +302,7 @@ public class ChunkPoolManager : MonoBehaviour {
 
     public int GetAvailableCount()
     {
-        return availableChunks.Count + chunkPool.Count;
+        return availableChunks.Count;
     }
 
     private void OnSceneUnloaded(UnityEngine.SceneManagement.Scene scene)

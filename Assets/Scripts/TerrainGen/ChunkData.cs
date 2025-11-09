@@ -59,6 +59,19 @@ public class ChunkData : System.IDisposable
     private int[]   pooledVoxelStates;
     private float[] pooledVoxelHitpoints;
 
+    private static bool QuickCheckLoggingEnabled =>
+        World.Instance != null &&
+        World.Instance.Config != null &&
+        World.Instance.Config.enableQuickCheckLogs;
+
+    private static void LogQuickCheck(string message)
+    {
+        if (QuickCheckLoggingEnabled)
+        {
+            Debug.Log(message);
+        }
+    }
+
     // The constructor now just sets up basic fields, no big allocations:
     public ChunkData(Vector3Int coordinate, int chunkSize, float surfaceLevel, float voxelSize, int poolId)
     {
@@ -153,12 +166,12 @@ public class ChunkData : System.IDisposable
 
     public bool QuickTerrainCheck(Vector3Int coord)
     {
-        Debug.Log($"[QuickCheck] Running for chunk {coord}");
+        LogQuickCheck($"[QuickCheck] Running for chunk {coord}");
         
         // Zero: Skip quick check if chunk is already known to be modified
         if (HasModifiedData)
         {
-            Debug.Log($"[QuickCheck] Chunk {coord} has local modifications, no early exit");
+            LogQuickCheck($"[QuickCheck] Chunk {coord} has local modifications, no early exit");
             return false;
         }
 
@@ -169,7 +182,7 @@ public class ChunkData : System.IDisposable
             // If this chunk was modified, we should always process it fully
             if (analysisData.WasModified)
             {
-                Debug.Log($"[QuickCheck] Chunk {coord} was previously modified, no early exit");
+                LogQuickCheck($"[QuickCheck] Chunk {coord} was previously modified, no early exit");
                 return false;
             }
             
@@ -179,7 +192,7 @@ public class ChunkData : System.IDisposable
                 cacheHasValidData = true;
                 isEmptyChunk = analysisData.IsEmpty;
                 isSolidChunk = analysisData.IsSolid;
-                Debug.Log($"[QuickCheck] Using cached analysis for chunk {coord}: Empty={isEmptyChunk}, Solid={isSolidChunk}");
+                LogQuickCheck($"[QuickCheck] Using cached analysis for chunk {coord}: Empty={isEmptyChunk}, Solid={isSolidChunk}");
             }
         }
 
@@ -189,14 +202,14 @@ public class ChunkData : System.IDisposable
             // Skip if pending updates exist
             if (World.Instance.HasPendingUpdates(coord))
             {
-                Debug.Log($"[QuickCheck] Chunk {coord} has pending updates, no early exit");
+                LogQuickCheck($"[QuickCheck] Chunk {coord} has pending updates, no early exit");
                 return false;
             }
 
             // Skip if marked for modification
             if (World.Instance.IsSolidChunkMarkedForModification(coord))
             {
-                Debug.Log($"[QuickCheck] Solid chunk {coord} marked for modification, no early exit");
+                LogQuickCheck($"[QuickCheck] Solid chunk {coord} marked for modification, no early exit");
                 return false;
             }
 
@@ -222,7 +235,7 @@ public class ChunkData : System.IDisposable
                     // Mixed terrain - cannot skip
                     if (hasUnderSurface && hasOverSurface)
                     {
-                        Debug.Log($"[QuickCheck] Chunk {coord} has mixed terrain, no early exit");
+                        LogQuickCheck($"[QuickCheck] Chunk {coord} has mixed terrain, no early exit");
                         TerrainAnalysisCache.SaveAnalysis(coord, false, false, false);
                         return false;
                     }
@@ -234,7 +247,7 @@ public class ChunkData : System.IDisposable
                 
                 // Save analysis for future reference
                 TerrainAnalysisCache.SaveAnalysis(coord, isEmptyChunk, isSolidChunk, false);
-                Debug.Log($"[QuickCheck] Sampled chunk {coord}: Empty={isEmptyChunk}, Solid={isSolidChunk}");
+                LogQuickCheck($"[QuickCheck] Sampled chunk {coord}: Empty={isEmptyChunk}, Solid={isSolidChunk}");
             }
             
             // By this point we have determined if it's empty/solid either from cache or sampling
@@ -242,17 +255,17 @@ public class ChunkData : System.IDisposable
             bool neighborHasUpdates = CheckNeighborsForUpdates(coord);
             if (neighborHasUpdates)
             {
-                Debug.Log($"[QuickCheck] Chunk {coord} has neighbor with updates, no early exit");
+                LogQuickCheck($"[QuickCheck] Chunk {coord} has neighbor with updates, no early exit");
                 return false;
             }
             
             // We can skip full loading!
-            Debug.Log($"[QuickCheck] SUCCESS: Chunk {coord} can skip full loading - Empty:{isEmptyChunk}, Solid:{isSolidChunk}");
+            LogQuickCheck($"[QuickCheck] SUCCESS: Chunk {coord} can skip full loading - Empty:{isEmptyChunk}, Solid:{isSolidChunk}");
             return true;
         }
         
         // If density points aren't created, we can't do quick check
-        Debug.Log($"[QuickCheck] Chunk {coord} doesn't have density data yet, no early exit");
+        LogQuickCheck($"[QuickCheck] Chunk {coord} doesn't have density data yet, no early exit");
         return false;
     }
 

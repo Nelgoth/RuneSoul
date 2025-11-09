@@ -57,6 +57,16 @@ public class Chunk : MonoBehaviour
     private bool isInitialized;
     public bool IsInitialized { get; private set; }
 
+    private bool ChunkLifecycleLogsEnabled =>
+        World.Instance != null &&
+        World.Instance.Config != null &&
+        World.Instance.Config.enableChunkLifecycleLogs;
+
+    private bool QuickCheckLogsEnabled =>
+        World.Instance != null &&
+        World.Instance.Config != null &&
+        World.Instance.Config.enableQuickCheckLogs;
+
     // Updates queue
     private List<PendingVoxelUpdate> pendingVoxelUpdates = new List<PendingVoxelUpdate>();
     private MarchingCubesBatchAllocator marchingCubesAllocator;
@@ -98,7 +108,10 @@ public class Chunk : MonoBehaviour
         {
             // Calculate chunk coordinate
             Vector3Int chunkCoord = Coord.WorldToChunkCoord(worldPosition, size, voxelSize);
-            Debug.Log($"Initializing chunk at position {worldPosition}, coord: {chunkCoord}, quickCheck: {quickCheck}");
+            if (ChunkLifecycleLogsEnabled)
+            {
+                Debug.Log($"Initializing chunk at position {worldPosition}, coord: {chunkCoord}, quickCheck: {quickCheck}");
+            }
             
             // Initialize ChunkData
             chunkData = new ChunkData(
@@ -119,7 +132,10 @@ public class Chunk : MonoBehaviour
             
             // Get current state for debugging
             var currentState = ChunkStateManager.Instance.GetChunkState(chunkCoord);
-            Debug.Log($"Chunk {chunkCoord} current state before loading: {currentState.Status}");
+            if (ChunkLifecycleLogsEnabled)
+            {
+                Debug.Log($"Chunk {chunkCoord} current state before loading: {currentState.Status}");
+            }
             
             // CRITICAL FIX: Don't try to change to Loading state if we're already in Loading state
             // This prevents the invalid "Loading -> Loading" transition that's causing issues
@@ -133,12 +149,18 @@ public class Chunk : MonoBehaviour
                     ChunkConfigurations.ChunkStatus.Loading,
                     ChunkConfigurations.ChunkStateFlags.Active
                 );
-                
-                Debug.Log($"Chunk {chunkCoord} transition to Loading: {transitionToLoadingSuccess}");
+
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"Chunk {chunkCoord} transition to Loading: {transitionToLoadingSuccess}");
+                }
             }
             else
             {
-                Debug.Log($"Chunk {chunkCoord} already in Loading state, skipping transition");
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"Chunk {chunkCoord} already in Loading state, skipping transition");
+                }
             }
             
             if (!transitionToLoadingSuccess)
@@ -154,7 +176,10 @@ public class Chunk : MonoBehaviour
             
             // Try to load saved data first
             bool dataLoaded = chunkData.TryLoadData();
-            Debug.Log($"Chunk {chunkCoord} data loaded: {dataLoaded}");
+            if (ChunkLifecycleLogsEnabled)
+            {
+                Debug.Log($"Chunk {chunkCoord} data loaded: {dataLoaded}");
+            }
             
             if (dataLoaded)
             {
@@ -165,7 +190,10 @@ public class Chunk : MonoBehaviour
                     ChunkConfigurations.ChunkStateFlags.Active
                 );
                 
-                Debug.Log($"Chunk {chunkCoord} transition to Loaded: {transitionSuccess}");
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"Chunk {chunkCoord} transition to Loaded: {transitionSuccess}");
+                }
 
                 // If the chunk has modifications, then transition to Modified state
                 if (chunkData.HasModifiedData)
@@ -176,14 +204,20 @@ public class Chunk : MonoBehaviour
                         ChunkConfigurations.ChunkStateFlags.Active
                     );
                     
-                    Debug.Log($"Chunk {chunkCoord} transition to Modified: {modifiedTransitionSuccess}");
+                    if (ChunkLifecycleLogsEnabled)
+                    {
+                        Debug.Log($"Chunk {chunkCoord} transition to Modified: {modifiedTransitionSuccess}");
+                    }
                 }
 
                 QueueGeneration(log: false, fullmesh: false, quickCheck);
             }
             else
             {
-                Debug.Log($"Chunk {chunkCoord} - no saved data, generating new content with quickCheck: {quickCheck}");
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"Chunk {chunkCoord} - no saved data, generating new content with quickCheck: {quickCheck}");
+                }
                 QueueGeneration(log: false, fullmesh: true, quickCheck);
             }
         }
@@ -202,13 +236,28 @@ public class Chunk : MonoBehaviour
     private void SetupComponents()
     {
         if (meshFilter == null)
-            meshFilter = gameObject.AddComponent<MeshFilter>();
+        {
+            if (!TryGetComponent(out meshFilter))
+            {
+                meshFilter = gameObject.AddComponent<MeshFilter>();
+            }
+        }
 
         if (meshRenderer == null)
-            meshRenderer = gameObject.AddComponent<MeshRenderer>();
+        {
+            if (!TryGetComponent(out meshRenderer))
+            {
+                meshRenderer = gameObject.AddComponent<MeshRenderer>();
+            }
+        }
 
         if (meshCollider == null)
-            meshCollider = gameObject.AddComponent<MeshCollider>();
+        {
+            if (!TryGetComponent(out meshCollider))
+            {
+                meshCollider = gameObject.AddComponent<MeshCollider>();
+            }
+        }
 
         transform.localScale = Vector3.one;
     }
@@ -409,9 +458,12 @@ public class Chunk : MonoBehaviour
                 }
                 
                 // Check if chunk is empty or solid
-                if (quickCheck && chunkData.QuickTerrainCheck(chunkData.ChunkCoordinate))
-                {
-                    Debug.Log($"[Chunk] QuickCheck early exit for chunk {chunkData.ChunkCoordinate} - Empty:{chunkData.IsEmptyChunk}, Solid:{chunkData.IsSolidChunk}");
+                    if (quickCheck && chunkData.QuickTerrainCheck(chunkData.ChunkCoordinate))
+                    {
+                        if (QuickCheckLogsEnabled)
+                        {
+                            Debug.Log($"[Chunk] QuickCheck early exit for chunk {chunkData.ChunkCoordinate} - Empty:{chunkData.IsEmptyChunk}, Solid:{chunkData.IsSolidChunk}");
+                        }
                     densityGenerationComplete = true;
                     marchingCubesComplete = true;
                     
@@ -719,7 +771,10 @@ public class Chunk : MonoBehaviour
             if (state.Status == ChunkConfigurations.ChunkStatus.Loaded || 
                 state.Status == ChunkConfigurations.ChunkStatus.Modified)
             {
-                Debug.Log($"Delayed unload request for empty/solid chunk {chunkCoord}");
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"Delayed unload request for empty/solid chunk {chunkCoord}");
+                }
                 ChunkOperationsQueue.Instance.QueueChunkForUnload(chunkCoord);
             }
         }
@@ -780,7 +835,10 @@ public class Chunk : MonoBehaviour
             else if (state.Status == ChunkConfigurations.ChunkStatus.Loaded)
             {
                 // The chunk is already in Loaded state - this is fine, no warning needed
-                Debug.Log($"Chunk {chunkCoord} generation complete, already in Loaded state");
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"Chunk {chunkCoord} generation complete, already in Loaded state");
+                }
             }
             else if (state.Status != ChunkConfigurations.ChunkStatus.Modified)
             {
@@ -984,7 +1042,10 @@ public class Chunk : MonoBehaviour
         if (TerrainAnalysisCache.TryGetAnalysis(chunkData.ChunkCoordinate, out var analysis) && analysis.IsSolid)
         {
             wasSolidChunk = true;
-            Debug.Log($"Processing voxel in solid chunk {chunkData.ChunkCoordinate} - position {voxelPosition}");
+            if (ChunkLifecycleLogsEnabled)
+            {
+                Debug.Log($"Processing voxel in solid chunk {chunkData.ChunkCoordinate} - position {voxelPosition}");
+            }
         }
 
         // Process the damage - special handling for solid chunks
@@ -1249,7 +1310,10 @@ public class Chunk : MonoBehaviour
         }
         
         // Force save the chunk data
-        Debug.Log($"Saving modified data for chunk {chunkData.ChunkCoordinate}");
+        if (ChunkLifecycleLogsEnabled)
+        {
+            Debug.Log($"Saving modified data for chunk {chunkData.ChunkCoordinate}");
+        }
         chunkData.SaveData();
     }
 

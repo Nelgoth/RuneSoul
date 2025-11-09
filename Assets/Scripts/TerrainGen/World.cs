@@ -70,6 +70,7 @@ public class World : MonoBehaviour
     public float noiseScale => Config.noiseScale;
     public float frequency => Config.frequency;
     public float surfaceLevel => Config.surfaceLevel;
+    private bool ChunkLifecycleLogsEnabled => config != null && config.enableChunkLifecycleLogs;
     #endregion
 
     #region Chunk Loading Configuration
@@ -85,7 +86,7 @@ public class World : MonoBehaviour
     public int InitialEmptyChunksTotal => Mathf.Max(initialLoadEmptyTracked.Count, initialLoadEmptyProcessed + initialLoadEmptyPendingUnload.Count);
     public bool IsInitialLoadComplete => !initialLoadInProgress;
     public float InitialLoadProgress => initialLoadProgress;
-    public int InitialLoadChunkBudget => initialLoadMaxChunksPerFrame;
+    public int InitialLoadChunkBudget => Config != null ? Config.GetInitialLoadChunkBudget() : 256;
     #endregion
 
     #region Private Fields
@@ -128,7 +129,6 @@ public class World : MonoBehaviour
     private float lastGlobalChunkUpdateTime = 0f;
     [SerializeField] public GameObject chunkPrefab;
     [Header("Initial Load")]
-    [SerializeField] private int initialLoadMaxChunksPerFrame = 256;
     private bool initialLoadInProgress = true;
     private float initialLoadProgress = 0f;
     private readonly HashSet<Vector3Int> initialLoadTargets = new HashSet<Vector3Int>();
@@ -1027,7 +1027,7 @@ public class World : MonoBehaviour
         if (operationsQueue == null || initialLoadEmptyUnloadQueue.Count == 0)
             return;
 
-        int budget = overrideBudget > 0 ? overrideBudget : Mathf.Max(1, initialLoadMaxChunksPerFrame);
+        int budget = overrideBudget > 0 ? overrideBudget : Mathf.Max(1, InitialLoadChunkBudget);
         int processedThisFrame = 0;
         int iterations = 0;
         int maxIterations = Mathf.Max(initialLoadEmptyUnloadQueue.Count, budget * 2);
@@ -2577,7 +2577,10 @@ public class World : MonoBehaviour
             if (state.Status == ChunkConfigurations.ChunkStatus.Loaded || 
                 state.Status == ChunkConfigurations.ChunkStatus.Modified)
             {
-                Debug.Log($"Scheduling unload for empty/solid chunk {chunkCoord}");
+                if (config != null && config.enableChunkLifecycleLogs)
+                {
+                    Debug.Log($"Scheduling unload for empty/solid chunk {chunkCoord}");
+                }
                 operationsQueue.QueueChunkForUnload(chunkCoord);
             }
         }
@@ -2784,7 +2787,10 @@ public class World : MonoBehaviour
             // CRITICAL: Always load solid chunks that are marked for modification
             if (modifiedSolidChunks.Contains(chunkCoord))
             {
-                Debug.Log($"[ShouldLoadChunk] Forcing load of modified solid chunk {chunkCoord}");
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"[ShouldLoadChunk] Forcing load of modified solid chunk {chunkCoord}");
+                }
                 loadValidationCache[chunkCoord] = Time.time;
                 return true;
             }
@@ -2792,7 +2798,10 @@ public class World : MonoBehaviour
             // CRITICAL: Check if the TerrainAnalysisCache has marked this chunk as modified
             if (TerrainAnalysisCache.IsChunkTrackedAsModified(chunkCoord))
             {
-                Debug.Log($"[ShouldLoadChunk] Forcing load of chunk {chunkCoord} marked as modified in TerrainAnalysisCache");
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"[ShouldLoadChunk] Forcing load of chunk {chunkCoord} marked as modified in TerrainAnalysisCache");
+                }
                 loadValidationCache[chunkCoord] = Time.time;
                 return true;
             }
@@ -2800,7 +2809,10 @@ public class World : MonoBehaviour
             // Chunks with pending updates should always load
             if (HasPendingUpdates(chunkCoord))
             {
-                Debug.Log($"[ShouldLoadChunk] Forcing load of chunk {chunkCoord} with pending updates");
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"[ShouldLoadChunk] Forcing load of chunk {chunkCoord} with pending updates");
+                }
                 loadValidationCache[chunkCoord] = Time.time;
                 return true;
             }
@@ -2813,14 +2825,20 @@ public class World : MonoBehaviour
             
             if (!validState)
             {
-                Debug.Log($"[ShouldLoadChunk] Chunk {chunkCoord} in invalid state for loading: {state.Status}");
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"[ShouldLoadChunk] Chunk {chunkCoord} in invalid state for loading: {state.Status}");
+                }
                 return false;
             }
 
             // Check for pending load operations
             if (operationsQueue.HasPendingLoadOperation(chunkCoord))
             {
-                Debug.Log($"[ShouldLoadChunk] Chunk {chunkCoord} already has a pending load operation");
+                if (ChunkLifecycleLogsEnabled)
+                {
+                    Debug.Log($"[ShouldLoadChunk] Chunk {chunkCoord} already has a pending load operation");
+                }
                 return false;
             }
 
@@ -2830,7 +2848,10 @@ public class World : MonoBehaviour
                 // Always load modified chunks regardless of whether they're solid/empty
                 if (analysis.WasModified)
                 {
-                    Debug.Log($"[ShouldLoadChunk] Forcing load of chunk {chunkCoord} marked as modified in analysis cache");
+                    if (ChunkLifecycleLogsEnabled)
+                    {
+                        Debug.Log($"[ShouldLoadChunk] Forcing load of chunk {chunkCoord} marked as modified in analysis cache");
+                    }
                     loadValidationCache[chunkCoord] = Time.time;
                     return true;
                 }
@@ -2841,7 +2862,10 @@ public class World : MonoBehaviour
                     !modifiedSolidChunks.Contains(chunkCoord) && 
                     !HasPendingUpdates(chunkCoord))
                 {
-                    Debug.Log($"[ShouldLoadChunk] Skipping load of {(analysis.IsEmpty ? "empty" : "solid")} chunk {chunkCoord}");
+                    if (ChunkLifecycleLogsEnabled)
+                    {
+                        Debug.Log($"[ShouldLoadChunk] Skipping load of {(analysis.IsEmpty ? "empty" : "solid")} chunk {chunkCoord}");
+                    }
                     loadValidationCache[chunkCoord] = Time.time;
                     return false;
                 }

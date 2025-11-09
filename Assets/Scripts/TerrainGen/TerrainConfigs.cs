@@ -29,8 +29,18 @@ public class TerrainConfigs : ScriptableObject
     public int UnloadRadius = 7;
     public int VerticalLoadRadius = 2;
     public int VerticalUnloadRadius = 3;
-    [Tooltip("Dynamic chunks processed per frame")]
-    public int ChunksPerFrame = 1;
+    [Tooltip("Baseline chunk operations processed per frame during gameplay")]
+    public int ChunksPerFrame = 64;
+    [Tooltip("Minimum chunk operations processed per frame even when throttled")]
+    public int minChunksPerFrame = 8;
+    [Tooltip("FPS threshold where chunk processing begins to throttle")]
+    public float chunkProcessingTargetFPS = 40f;
+    [Tooltip("FPS threshold where chunk processing is reduced to the minimum throughput")]
+    public float chunkProcessingMinimumFPS = 20f;
+    [Tooltip("Multiplier applied to the base chunk throughput during the initial world load")]
+    public float initialLoadChunkMultiplier = 12f;
+    [Tooltip("Upper bound on chunk operations per frame during initial load")]
+    public int maxInitialLoadChunksPerFrame = 2048;
 
     [Header("Generation")]
     [Tooltip("Base terrain height")]
@@ -81,12 +91,65 @@ public class TerrainConfigs : ScriptableObject
     [Header("Terrain Analysis Settings")]
     public float AnalysisCacheExpirationDays = 30f; // Default to 30 days
     public bool PermanentlyStoreEmptyChunks = true; // Never expire empty chunk data
+
+    [Header("Chunk Pool Settings")]
+    [Tooltip("If enabled, the chunk pool size is calculated from the load radii and buffer multiplier")]
+    public bool autoCalculateChunkPoolSize = true;
+    [Tooltip("Manual chunk pool size when automatic calculation is disabled")]
+    public int manualChunkPoolSize = 36000;
+    [Tooltip("Applied when auto calculating to give extra pooled chunks")]
+    [Range(1f, 2f)]
+    public float chunkPoolBufferMultiplier = 1.1f;
+    
+    [Header("Debug Logging")]
+    [Tooltip("Enable detailed state transition logs for chunks")]
+    public bool enableChunkStateLogs = false;
+    [Tooltip("Enable verbose chunk lifecycle logs (initialization, loading, unloading)")]
+    public bool enableChunkLifecycleLogs = false;
+    [Tooltip("Enable detailed quick-check diagnostics during chunk loading")]
+    public bool enableQuickCheckLogs = false;
+
+    public int GetInitialLoadChunkBudget()
+    {
+        int baseChunks = Mathf.Max(minChunksPerFrame, ChunksPerFrame);
+        int computed = Mathf.RoundToInt(baseChunks * Mathf.Max(1f, initialLoadChunkMultiplier));
+        if (maxInitialLoadChunksPerFrame > 0)
+        {
+            computed = Mathf.Min(computed, Mathf.Max(baseChunks, maxInitialLoadChunksPerFrame));
+        }
+        return Mathf.Max(minChunksPerFrame, computed);
+    }
+
+    public int GetInitialChunkPoolSize()
+    {
+        if (!autoCalculateChunkPoolSize)
+        {
+            return Mathf.Max(1, manualChunkPoolSize);
+        }
+
+        int horizontalRadius = Mathf.Max(0, LoadRadius);
+        int verticalRadius = Mathf.Max(0, VerticalLoadRadius);
+
+        int horizontalCount = (horizontalRadius * 2) + 1;
+        int verticalCount = (verticalRadius * 2) + 1;
+
+        long baseCount = (long)horizontalCount * horizontalCount * verticalCount;
+        baseCount = Mathf.CeilToInt(baseCount * Mathf.Max(1f, chunkPoolBufferMultiplier));
+
+        return Mathf.Clamp((int)baseCount, 1, int.MaxValue);
+    }
       
     private void OnValidate()
     {
         // Ensure reasonable minimums
         meshVertexBufferSize = Mathf.Max(1000, meshVertexBufferSize);
-        ChunksPerFrame = Mathf.Max(1, ChunksPerFrame);
+        minChunksPerFrame = Mathf.Max(1, minChunksPerFrame);
+        ChunksPerFrame = Mathf.Max(minChunksPerFrame, ChunksPerFrame);
+        chunkProcessingTargetFPS = Mathf.Max(10f, chunkProcessingTargetFPS);
+        chunkProcessingMinimumFPS = Mathf.Clamp(chunkProcessingMinimumFPS, 1f, chunkProcessingTargetFPS - 1f);
+        initialLoadChunkMultiplier = Mathf.Max(1f, initialLoadChunkMultiplier);
+        maxInitialLoadChunksPerFrame = Mathf.Max(ChunksPerFrame, maxInitialLoadChunksPerFrame);
+        manualChunkPoolSize = Mathf.Max(1, manualChunkPoolSize);
         
         // Scale vertex buffer with chunk size
         int expectedVertices = chunkSize * chunkSize * chunkSize / 4;

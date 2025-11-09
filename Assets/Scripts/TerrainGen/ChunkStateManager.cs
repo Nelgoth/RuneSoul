@@ -18,6 +18,11 @@ public class ChunkStateManager : MonoBehaviour
     
     public HashSet<Vector3Int> QuarantinedChunks { get; } = new HashSet<Vector3Int>();
 
+    private bool ShouldLogStateTransitions =>
+        World.Instance != null &&
+        World.Instance.Config != null &&
+        World.Instance.Config.enableChunkStateLogs;
+
     public class ChunkState
     {
         public ChunkConfigurations.ChunkStatus Status { get; private set; }
@@ -120,13 +125,19 @@ public class ChunkStateManager : MonoBehaviour
             ChunkConfigurations.ChunkStateFlags initialFlags = currentState.Flags;
 
             // DEBUG: Log state change attempt
-            Debug.Log($"[StateManager] Attempting state change for chunk {chunkCoord}: {initialStatus} -> {newStatus}");
+            if (ShouldLogStateTransitions)
+            {
+                Debug.Log($"[StateManager] Attempting state change for chunk {chunkCoord}: {initialStatus} -> {newStatus}");
+            }
 
             // CRITICAL FIX: Skip validation and update if state and flags are the same
             // This simplifies idempotent state setting operations
             if (initialStatus == newStatus && initialFlags == newFlags)
             {
-                Debug.Log($"[StateManager] Chunk {chunkCoord} already in requested state {newStatus} with flags {newFlags}, skipping update");
+                if (ShouldLogStateTransitions)
+                {
+                    Debug.Log($"[StateManager] Chunk {chunkCoord} already in requested state {newStatus} with flags {newFlags}, skipping update");
+                }
                 return true;
             }
 
@@ -176,7 +187,10 @@ public class ChunkStateManager : MonoBehaviour
                 StateChanged?.Invoke(chunkCoord, initialStatus, initialFlags, newStatus, newFlags);
                 
                 // DEBUG: Log successful state change
-                Debug.Log($"[StateManager] Successfully changed state for chunk {chunkCoord}: {initialStatus} -> {newStatus}");
+                if (ShouldLogStateTransitions)
+                {
+                    Debug.Log($"[StateManager] Successfully changed state for chunk {chunkCoord}: {initialStatus} -> {newStatus}");
+                }
                 
                 return true;
             }
@@ -245,7 +259,10 @@ public class ChunkStateManager : MonoBehaviour
         // This prevents errors when code tries to ensure a specific state
         if (from == to)
         {
-            Debug.Log($"State transition to same state: {from} -> {to} (treated as valid)");
+            if (ShouldLogStateTransitions)
+            {
+                Debug.Log($"State transition to same state: {from} -> {to} (treated as valid)");
+            }
             return true;
         }
 
