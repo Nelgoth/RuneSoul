@@ -13,6 +13,7 @@ public static class SaveSystem
     private static string cachedChunkFolder = null;
     private static readonly object saveLock = new object();
     private static Dictionary<Vector3Int, string> chunkFilePathCache = new Dictionary<Vector3Int, string>(500);
+    private static bool ShouldLogChunkIO => World.Instance != null && World.Instance.Config != null && World.Instance.Config.enableChunkIOLogs;
     
     private static string GetSaveFolder()
     {
@@ -29,7 +30,10 @@ public static class SaveSystem
         cachedWorldFolder = WorldSaveManager.Instance.WorldSaveFolder;
         if (!Directory.Exists(cachedWorldFolder))
         {
-            Debug.Log($"[WorldSaveManager] Creating world folder: {cachedWorldFolder}");
+            if (ShouldLogChunkIO)
+            {
+                Debug.Log($"[WorldSaveManager] Creating world folder: {cachedWorldFolder}");
+            }
             Directory.CreateDirectory(cachedWorldFolder);
         }
 
@@ -37,7 +41,10 @@ public static class SaveSystem
         cachedChunkFolder = cachedWorldFolder + "/Chunks";
         if (!Directory.Exists(cachedChunkFolder))
         {
-            Debug.Log($"[WorldSaveManager] Creating chunks folder: {cachedChunkFolder}");
+            if (ShouldLogChunkIO)
+            {
+                Debug.Log($"[WorldSaveManager] Creating chunks folder: {cachedChunkFolder}");
+            }
             Directory.CreateDirectory(cachedChunkFolder);
         }
 
@@ -78,6 +85,10 @@ public static class SaveSystem
         {
             try
             {
+                if (ShouldLogChunkIO)
+                {
+                    Debug.Log($"[SaveSystem] Saving chunk {data.ChunkCoordinate} to {filePath}");
+                }
                 string json = JsonUtility.ToJson(data, prettyPrint: false);
                 File.WriteAllText(tempPath, json);
 
@@ -102,6 +113,12 @@ public static class SaveSystem
         
         lock (saveLock)
         {
+            bool fileExists = File.Exists(filePath);
+            if (ShouldLogChunkIO)
+            {
+                Debug.Log($"[SaveSystem] Loading chunk {chunkCoord} from {filePath} (exists={fileExists})");
+            }
+
             if (!File.Exists(filePath))
                 return false;
 

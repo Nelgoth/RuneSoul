@@ -64,9 +64,22 @@ public class ChunkData : System.IDisposable
         World.Instance.Config != null &&
         World.Instance.Config.enableQuickCheckLogs;
 
+    private static bool ChunkIoLoggingEnabled =>
+        World.Instance != null &&
+        World.Instance.Config != null &&
+        World.Instance.Config.enableChunkIOLogs;
+
     private static void LogQuickCheck(string message)
     {
         if (QuickCheckLoggingEnabled)
+        {
+            Debug.Log(message);
+        }
+    }
+
+    private static void LogChunkIo(string message)
+    {
+        if (ChunkIoLoggingEnabled)
         {
             Debug.Log(message);
         }
@@ -299,6 +312,7 @@ public class ChunkData : System.IDisposable
     {
         if (SaveSystem.LoadChunkData(ChunkCoordinate, this))
         {
+            LogChunkIo($"[ChunkData] TryLoadData succeeded for {ChunkCoordinate}");
             EnsureArraysCreated(); // Ensure arrays are created before loading
             LoadFromSerialization();
             ValidateDensityPoints(); // Validate loaded data
@@ -361,6 +375,10 @@ public class ChunkData : System.IDisposable
             
             HasSavedData = true;
             return true;
+        }
+        else
+        {
+            LogChunkIo($"[ChunkData] TryLoadData found no saved data for {ChunkCoordinate}");
         }
         HasSavedData = false;
         return false;
@@ -601,6 +619,7 @@ public class ChunkData : System.IDisposable
     {
         if (HasModifiedData)
         {
+            Debug.Log($"[ChunkData] SaveData invoked for {ChunkCoordinate} (modified={HasModifiedData})");
             // Ensure arrays are created before preparing for serialization
             EnsureArraysCreated();
             

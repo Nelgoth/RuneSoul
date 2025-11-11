@@ -24,6 +24,7 @@ public static class TerrainAnalysisCache
     private static readonly HashSet<Vector3Int> pendingSaveCoords = new HashSet<Vector3Int>();
     private static readonly Queue<TerrainAnalysisData> saveBatchQueue = new Queue<TerrainAnalysisData>();
     private const int BATCH_SIZE = 250;
+    private const int ACCELERATED_BATCH_SIZE = 8192;
     private static readonly int MAX_CACHE_SIZE = 100000;
     private static int pruneCount = 0;
     
@@ -39,6 +40,8 @@ public static class TerrainAnalysisCache
     private static string worldCacheFolder = null;
 
     private static HashSet<Vector3Int> recentlyAnalyzed = new HashSet<Vector3Int>();
+    
+    private static bool synchronousFlushMode = false;
     
     // Logging levels for debugging
     private enum LogLevel { None, Error, Warning, Info, Debug }
@@ -101,12 +104,76 @@ public static class TerrainAnalysisCache
         }
     }
 
+    public static void SetLogVerbosity(TerrainConfigs.LogVerbosity verbosity)
+    {
+        switch (verbosity)
+        {
+            case TerrainConfigs.LogVerbosity.Debug:
+                logLevel = LogLevel.Debug;
+                break;
+            case TerrainConfigs.LogVerbosity.Info:
+                logLevel = LogLevel.Info;
+                break;
+            case TerrainConfigs.LogVerbosity.Warnings:
+                logLevel = LogLevel.Warning;
+                break;
+            case TerrainConfigs.LogVerbosity.ErrorsOnly:
+            default:
+                logLevel = LogLevel.Error;
+                break;
+        }
+    }
+
+    public static void ApplyLoggingFromConfig(TerrainConfigs configs)
+    {
+        if (configs == null)
+            return;
+
+        SetLogVerbosity(configs.terrainCacheLogLevel);
+    }
+
     private static int GetCacheSize() 
     {
         lock(cacheLock) 
         {
             return analysisCache.Count;
         }
+    }
+
+    public static void SetSynchronousFlushMode(bool enabled)
+    {
+        if (synchronousFlushMode == enabled)
+            return;
+
+        synchronousFlushMode = enabled;
+
+        if (enabled)
+        {
+            ProcessPendingSavesInternal(true, ACCELERATED_BATCH_SIZE);
+        }
+    }
+
+    public static bool IsSynchronousFlushMode => synchronousFlushMode;
+
+    public static int GetPendingSaveCount()
+    {
+        lock (cacheLock)
+        {
+            return pendingSaveCoords.Count + saveBatchQueue.Count;
+        }
+    }
+
+    public static bool HasPendingWork()
+    {
+        lock (cacheLock)
+        {
+            return pendingSaveCoords.Count > 0 || saveBatchQueue.Count > 0 || currentSaveTask != null;
+        }
+    }
+
+    public static int ProcessPendingSavesImmediate(int batchOverride = -1)
+    {
+        return ProcessPendingSavesInternal(true, batchOverride);
     }
 
     private static string GetCacheFolder()
@@ -263,11 +330,12 @@ public static class TerrainAnalysisCache
         // Process any pending saves in batches
         if (pendingSaveCoords.Count > 0)
         {
-            ProcessPendingSaves();
+            int batchOverride = synchronousFlushMode ? Mathf.Max(ACCELERATED_BATCH_SIZE, BATCH_SIZE) : -1;
+            ProcessPendingSavesInternal(true, batchOverride);
         }
 
         // Check if it's time for a regular save
-        if (Time.time - lastSaveTime > SAVE_INTERVAL && isDirty)
+        if (!synchronousFlushMode && Time.time - lastSaveTime > SAVE_INTERVAL && isDirty)
         {
             QueueFullSave();
             recentlyAnalyzed.Clear();
@@ -314,41 +382,57 @@ public static class TerrainAnalysisCache
         // Force a save of all cached data
         QueueFullSave();
         
-        // Process pending saves immediately
-        ProcessPendingSaves();
-        
-        // If there's an active save task, wait for it to complete
-        if (currentSaveTask != null && !currentSaveTask.IsCompleted)
+        while (HasPendingWork())
         {
-            try
-            {
-                currentSaveTask.Wait();
-            }
-            catch (Exception e)
-            {
-                LogMessage($"Error waiting for terrain analysis save: {e.Message}", LogLevel.Error);
-            }
+            ProcessPendingSavesInternal(false, int.MaxValue);
         }
         
         LogMessage("TerrainAnalysisCache forced synchronization complete", LogLevel.Info);
     }
 
-    private static void ProcessPendingSaves()
+    private static int ProcessPendingSavesInternal(bool allowAsync, int batchOverride = -1)
     {
-        // Skip if a save is already in progress or we're quitting
-        if ((currentSaveTask != null && !currentSaveTask.IsCompleted) || isApplicationQuitting)
+        if (isApplicationQuitting)
         {
-            return;
+            return 0;
+        }
+
+        if (currentSaveTask != null)
+        {
+            if (allowAsync)
+            {
+                if (!currentSaveTask.IsCompleted)
+                {
+                    return 0;
+                }
+            }
+            else
+            {
+                try
+                {
+                    currentSaveTask.Wait();
+                }
+                catch (Exception e)
+                {
+                    LogMessage($"Error completing terrain analysis save task: {e.Message}", LogLevel.Error);
+                }
+            }
+
+            currentSaveTask = null;
         }
 
         List<TerrainAnalysisData> batchData = null;
-        
+        int processedCount = 0;
+
         lock (cacheLock)
         {
-            // Fill batch queue if empty
             if (saveBatchQueue.Count == 0 && pendingSaveCoords.Count > 0)
             {
-                var coordsToProcess = pendingSaveCoords.Take(BATCH_SIZE).ToList();
+                int targetBatchSize = batchOverride > 0
+                    ? batchOverride
+                    : (allowAsync ? BATCH_SIZE : Mathf.Max(BATCH_SIZE, pendingSaveCoords.Count));
+
+                var coordsToProcess = pendingSaveCoords.Take(targetBatchSize).ToList();
                 foreach (var coord in coordsToProcess)
                 {
                     if (analysisCache.TryGetValue(coord, out var data))
@@ -359,19 +443,35 @@ public static class TerrainAnalysisCache
                 }
             }
 
-            // Process current batch
             if (saveBatchQueue.Count > 0)
             {
                 batchData = new List<TerrainAnalysisData>(saveBatchQueue);
+                processedCount = batchData.Count;
                 saveBatchQueue.Clear();
+            }
+            else if (pendingSaveCoords.Count == 0 && !allowAsync)
+            {
+                if (isDirty)
+                {
+                    isDirty = false;
+                    lastSaveTime = Time.time;
+                }
             }
         }
 
-        // Start the save task if we have data to save
         if (batchData != null && batchData.Count > 0)
         {
-            currentSaveTask = MergeBatchAsync(batchData);
+            if (allowAsync)
+            {
+                currentSaveTask = MergeBatchAsync(new List<TerrainAnalysisData>(batchData));
+                return 0;
+            }
+
+            MergeBatchData(batchData);
+            return processedCount;
         }
+
+        return 0;
     }
 
     private static async Task MergeBatchAsync(List<TerrainAnalysisData> batchData)
@@ -379,97 +479,97 @@ public static class TerrainAnalysisCache
         if (batchData == null || batchData.Count == 0 || isApplicationQuitting) 
             return;
 
+        // IMPORTANT: Resolve the cache path on the main thread before jumping to a background task.
+        string cacheFilePath = GetCacheFilePath();
+        if (string.IsNullOrEmpty(cacheFilePath))
+        {
+            LogMessage("Cannot save terrain analysis: Invalid cache file path", LogLevel.Error);
+            return;
+        }
+
         try
         {
-            // Get the cache file path on the main thread before entering the task
-            string cacheFilePath = GetCacheFilePath();
-            if (string.IsNullOrEmpty(cacheFilePath))
-            {
-                LogMessage("Cannot save terrain analysis: Invalid cache file path", LogLevel.Error);
-                return;
-            }
-
-            await Task.Run(() =>
-            {
-                try
-                {
-                    // Load existing data
-                    List<TerrainAnalysisData> existingData = new List<TerrainAnalysisData>();
-                    if (File.Exists(cacheFilePath))
-                    {
-                        using (var fs = File.OpenRead(cacheFilePath))
-                        {
-                            BinaryFormatter formatter = new BinaryFormatter();
-                            existingData = (List<TerrainAnalysisData>)formatter.Deserialize(fs);
-                        }
-                    }
-
-                    // Create a dictionary for faster lookup
-                    Dictionary<SerializableVector3Int, TerrainAnalysisData> existingDict = 
-                        existingData.ToDictionary(d => d.Coordinate, d => d);
-                    
-                    // Update existing entries or add new ones
-                    foreach (var newData in batchData)
-                    {
-                        if (existingDict.TryGetValue(newData.Coordinate, out var existingEntry))
-                        {
-                            // Only replace if newer
-                            if (newData.LastAnalyzed > existingEntry.LastAnalyzed)
-                            {
-                                existingDict[newData.Coordinate] = newData;
-                            }
-                        }
-                        else
-                        {
-                            // Add new data
-                            existingDict[newData.Coordinate] = newData;
-                        }
-                    }
-                    
-                    // Convert back to list
-                    List<TerrainAnalysisData> mergedData = existingDict.Values.ToList();
-
-                    // Save merged data
-                    string tempPath = cacheFilePath + ".tmp";
-                    lock (saveTaskLock)
-                    {
-                        // Ensure directory exists
-                        string directory = Path.GetDirectoryName(tempPath);
-                        if (!Directory.Exists(directory))
-                        {
-                            Directory.CreateDirectory(directory);
-                        }
-                        
-                        using (var fs = File.Create(tempPath))
-                        {
-                            BinaryFormatter formatter = new BinaryFormatter();
-                            formatter.Serialize(fs, mergedData);
-                        }
-
-                        // Safe delete and move
-                        if (File.Exists(cacheFilePath))
-                        {
-                            File.Delete(cacheFilePath);
-                        }
-                        File.Move(tempPath, cacheFilePath);
-                    }
-
-                    // Log on the main thread but don't use Unity API directly
-                    System.Diagnostics.Debug.WriteLine($"Merged {batchData.Count} terrain analyses, total cached: {mergedData.Count}");
-                }
-                catch (Exception e)
-                {
-                    // Safe logging for background thread
-                    System.Diagnostics.Debug.WriteLine($"Failed to merge terrain analysis batch: {e.Message}\n{e.StackTrace}");
-                }
-            });
-            
-            // Log from the main thread after the task completes
+            await Task.Run(() => MergeBatchData(batchData, cacheFilePath));
             LogMessage($"Successfully saved {batchData.Count} terrain analyses", LogLevel.Info);
         }
         catch (Exception e)
         {
             LogMessage($"Error scheduling terrain analysis batch: {e.Message}", LogLevel.Error);
+        }
+    }
+
+    private static void MergeBatchData(List<TerrainAnalysisData> batchData, string cacheFilePath = null)
+    {
+        if (batchData == null || batchData.Count == 0 || isApplicationQuitting)
+            return;
+
+        try
+        {
+            if (string.IsNullOrEmpty(cacheFilePath))
+            {
+                cacheFilePath = GetCacheFilePath();
+                if (string.IsNullOrEmpty(cacheFilePath))
+                {
+                    LogMessage("Cannot save terrain analysis: Invalid cache file path", LogLevel.Error);
+                    return;
+                }
+            }
+
+            List<TerrainAnalysisData> existingData = new List<TerrainAnalysisData>();
+            if (File.Exists(cacheFilePath))
+            {
+                using (var fs = File.OpenRead(cacheFilePath))
+                {
+                    BinaryFormatter formatter = new BinaryFormatter();
+                    existingData = (List<TerrainAnalysisData>)formatter.Deserialize(fs);
+                }
+            }
+
+            Dictionary<SerializableVector3Int, TerrainAnalysisData> existingDict =
+                existingData.ToDictionary(d => d.Coordinate, d => d);
+
+            foreach (var newData in batchData)
+            {
+                if (existingDict.TryGetValue(newData.Coordinate, out var existingEntry))
+                {
+                    if (newData.LastAnalyzed > existingEntry.LastAnalyzed)
+                    {
+                        existingDict[newData.Coordinate] = newData;
+                    }
+                }
+                else
+                {
+                    existingDict[newData.Coordinate] = newData;
+                }
+            }
+
+            List<TerrainAnalysisData> mergedData = existingDict.Values.ToList();
+
+            string tempPath = cacheFilePath + ".tmp";
+            lock (saveTaskLock)
+            {
+                string directory = Path.GetDirectoryName(tempPath);
+                if (!Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                using (var fs = File.Create(tempPath))
+                {
+                    BinaryFormatter formatter = new BinaryFormatter();
+                    formatter.Serialize(fs, mergedData);
+                }
+
+                if (File.Exists(cacheFilePath))
+                {
+                    File.Delete(cacheFilePath);
+                }
+                File.Move(tempPath, cacheFilePath);
+            }
+        }
+        catch (Exception e)
+        {
+            LogMessage($"Error saving terrain analysis batch: {e.Message}\n{e.StackTrace}", LogLevel.Error);
         }
     }
 
@@ -614,14 +714,31 @@ public static class TerrainAnalysisCache
         {
             lock (cacheLock)
             {
+                if (analysisCache.TryGetValue(coord, out var existingData))
+                {
+                    bool entryChanged = existingData.IsEmpty != isEmpty ||
+                                        existingData.IsSolid != isSolid ||
+                                        existingData.WasModified != wasModified;
+
+                    if (!entryChanged)
+                    {
+                        existingData.LastAnalyzedTicks = DateTime.UtcNow.Ticks;
+                        recentlyAnalyzed.Add(coord);
+                        return;
+                    }
+                }
+
                 analysisCache[coord] = data;
                 recentlyAnalyzed.Add(coord);
                 isDirty = true;
+
+                // Always schedule this coordinate for persistence so cached data survives restarts
+                pendingSaveCoords.Add(coord);
                 
                 // Force immediate save for modified solid chunks to prevent loss on crashes
                 if (wasModified && (isEmpty || isSolid))
                 {
-                    pendingSaveCoords.Add(coord);
+                    LogMessage($"Queuing modified solid/empty chunk {coord} for immediate terrain analysis save", LogLevel.Info);
                 }
                 
                 LogMessage($"Saved analysis for chunk {coord}: {(isEmpty ? "Empty" : isSolid ? "Solid" : "Mixed")}" +

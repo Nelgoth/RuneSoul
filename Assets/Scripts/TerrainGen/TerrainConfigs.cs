@@ -4,6 +4,13 @@ using UnityEngine;
 [CreateAssetMenu(fileName = "TerrainConfigs", menuName = "Voxel/TerrainConfigs")]
 public class TerrainConfigs : ScriptableObject
 {
+    public enum LogVerbosity
+    {
+        ErrorsOnly,
+        Warnings,
+        Info,
+        Debug
+    }
     [Header("Core Settings")]
     [Tooltip("Size of each chunk in voxels")]
     public int chunkSize = 16;
@@ -102,6 +109,10 @@ public class TerrainConfigs : ScriptableObject
     public float chunkPoolBufferMultiplier = 1.1f;
     
     [Header("Debug Logging")]
+    [Tooltip("Controls how verbose terrain analysis cache logging should be")]
+    public LogVerbosity terrainCacheLogLevel = LogVerbosity.Warnings;
+    [Tooltip("Log chunk save/load operations to the console")]
+    public bool enableChunkIOLogs = false;
     [Tooltip("Enable detailed state transition logs for chunks")]
     public bool enableChunkStateLogs = false;
     [Tooltip("Enable verbose chunk lifecycle logs (initialization, loading, unloading)")]

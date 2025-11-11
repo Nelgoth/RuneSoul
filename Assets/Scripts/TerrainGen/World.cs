@@ -131,6 +131,7 @@ public class World : MonoBehaviour
     [Header("Initial Load")]
     private bool initialLoadInProgress = true;
     private float initialLoadProgress = 0f;
+    private const int InitialLoadTerrainCacheFlushBatch = 8192;
     private readonly HashSet<Vector3Int> initialLoadTargets = new HashSet<Vector3Int>();
     private readonly HashSet<Vector3Int> initialLoadPending = new HashSet<Vector3Int>();
     private readonly Queue<Vector3Int> initialLoadEmptyUnloadQueue = new Queue<Vector3Int>();
@@ -139,7 +140,9 @@ public class World : MonoBehaviour
     private readonly HashSet<Vector3Int> initialLoadEmptyPendingUnload = new HashSet<Vector3Int>();
     private int initialLoadEmptyTotal = 0;
     private int initialLoadEmptyProcessed = 0;
-    private enum InitialLoadStage { LoadingChunks, UnloadingEmptyChunks, Complete }
+    private int initialLoadTerrainTotal = 0;
+    private int initialLoadTerrainProcessed = 0;
+    private enum InitialLoadStage { LoadingChunks, ProcessingTerrainCache, UnloadingEmptyChunks, Complete }
     private InitialLoadStage initialLoadStage = InitialLoadStage.LoadingChunks;
     private float initialLoadStartTime = -1f;
     private bool initialLoadCompletionBroadcasted = false;
@@ -165,6 +168,10 @@ public class World : MonoBehaviour
         {
             Instance = this;
             chunks = new Dictionary<Vector3Int, Chunk>();
+            if (config != null)
+            {
+                TerrainAnalysisCache.ApplyLoggingFromConfig(config);
+            }
             // Important: Make sure we're spawned before any chunks try to parent to us
             var netObj = GetComponent<NetworkObject>();
             if (netObj != null && NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
@@ -178,6 +185,14 @@ public class World : MonoBehaviour
         else
         {
             Destroy(gameObject);
+        }
+    }
+
+    private void OnValidate()
+    {
+        if (config != null)
+        {
+            TerrainAnalysisCache.ApplyLoggingFromConfig(config);
         }
     }
 
@@ -501,15 +516,51 @@ public class World : MonoBehaviour
 
         if (initialLoadInProgress)
         {
-            UpdateInitialLoadUI();
-            ProcessInitialLoadEmptyUnloads();
+            CleanupStaleInitialLoadEntries();
+
+            if (initialLoadStage == InitialLoadStage.ProcessingTerrainCache)
+            {
+                TerrainAnalysisCache.ProcessPendingSavesImmediate(InitialLoadTerrainCacheFlushBatch);
+            }
+            else if (initialLoadStage == InitialLoadStage.UnloadingEmptyChunks)
+            {
+                ProcessInitialLoadEmptyUnloads();
+            }
+
+            UpdateInitialLoadProgressState();
         }
 
-        // Process operations in order
-        operationsQueue.ProcessOperations();
+        bool allowQueueProcessing = !initialLoadInProgress || initialLoadStage != InitialLoadStage.ProcessingTerrainCache;
+        if (allowQueueProcessing)
+        {
+            operationsQueue.ProcessOperations();
+        }
+
+        if (initialLoadInProgress)
+        {
+            if (initialLoadStage == InitialLoadStage.UnloadingEmptyChunks)
+            {
+                bool hasPendingUnloads = initialLoadEmptyPendingUnload.Count > 0 || initialLoadEmptyUnloadQueue.Count > 0;
+                bool queueBusy = operationsQueue != null && operationsQueue.HasPendingUnloadOperations();
+                bool terrainPending = TerrainAnalysisCache.HasPendingWork();
+
+                if (!hasPendingUnloads && !queueBusy && !terrainPending)
+                {
+                    CompleteInitialLoad();
+                }
+            }
+            else if (initialLoadStage == InitialLoadStage.ProcessingTerrainCache)
+            {
+                if (!TerrainAnalysisCache.HasPendingWork() && TerrainAnalysisCache.GetPendingSaveCount() == 0)
+                {
+                    CompleteInitialLoad();
+                }
+            }
+        }
         
         // Only update chunks if we have a valid player position
-        if (playerPosition != Vector3.zero)
+        bool allowChunkStreaming = !initialLoadInProgress || initialLoadStage == InitialLoadStage.LoadingChunks;
+        if (allowChunkStreaming && playerPosition != Vector3.zero)
         {
             UpdateChunks(playerPosition);
         }
@@ -966,6 +1017,9 @@ public class World : MonoBehaviour
         initialLoadEmptyPendingUnload.Clear();
         initialLoadEmptyTotal = 0;
         initialLoadEmptyProcessed = 0;
+        initialLoadTerrainTotal = 0;
+        initialLoadTerrainProcessed = 0;
+        TerrainAnalysisCache.SetSynchronousFlushMode(false);
         initialLoadStartTime = Time.time;
         initialLoadCompletionBroadcasted = false;
         UpdateInitialLoadUI("Preparing terrain...");
@@ -1027,7 +1081,21 @@ public class World : MonoBehaviour
         if (operationsQueue == null || initialLoadEmptyUnloadQueue.Count == 0)
             return;
 
-        int budget = overrideBudget > 0 ? overrideBudget : Mathf.Max(1, InitialLoadChunkBudget);
+        bool isDuringInitialLoad = initialLoadInProgress && initialLoadStage == InitialLoadStage.UnloadingEmptyChunks;
+        int budget;
+
+        if (overrideBudget > 0)
+        {
+            budget = overrideBudget;
+        }
+        else if (isDuringInitialLoad)
+        {
+            budget = Mathf.Max(initialLoadEmptyPendingUnload.Count, initialLoadEmptyUnloadQueue.Count);
+        }
+        else
+        {
+            budget = Mathf.Max(1, InitialLoadChunkBudget);
+        }
         int processedThisFrame = 0;
         int iterations = 0;
         int maxIterations = Mathf.Max(initialLoadEmptyUnloadQueue.Count, budget * 2);
@@ -1077,9 +1145,6 @@ public class World : MonoBehaviour
 
     private void UpdateInitialLoadProgressState()
     {
-        if (!initialLoadInProgress)
-            return;
-
         switch (initialLoadStage)
         {
             case InitialLoadStage.LoadingChunks:
@@ -1096,15 +1161,68 @@ public class World : MonoBehaviour
 
                 if (initialLoadPending.Count == 0 && total > 0)
                 {
+                    int pendingTerrain = TerrainAnalysisCache.GetPendingSaveCount();
+                    bool terrainWorkPending = pendingTerrain > 0 || TerrainAnalysisCache.HasPendingWork();
                     bool hasEmptyWork = initialLoadEmptyTracked.Count > 0 ||
-                        initialLoadEmptyPendingUnload.Count > 0 ||
-                        initialLoadEmptyUnloadQueue.Count > 0;
+                                        initialLoadEmptyPendingUnload.Count > 0 ||
+                                        initialLoadEmptyUnloadQueue.Count > 0;
+
+                    if (terrainWorkPending)
+                    {
+                        initialLoadStage = InitialLoadStage.ProcessingTerrainCache;
+                        initialLoadTerrainTotal = Mathf.Max(pendingTerrain, 1);
+                        initialLoadTerrainProcessed = Mathf.Clamp(initialLoadTerrainTotal - pendingTerrain, 0, initialLoadTerrainTotal);
+                        TerrainAnalysisCache.SetSynchronousFlushMode(true);
+                        initialLoadProgress = initialLoadTerrainTotal > 0
+                            ? Mathf.Clamp01(initialLoadTerrainProcessed / (float)initialLoadTerrainTotal)
+                            : 0f;
+                    }
+                    else if (hasEmptyWork)
+                    {
+                        initialLoadStage = InitialLoadStage.UnloadingEmptyChunks;
+                        int effectiveTotal = Mathf.Max(initialLoadEmptyTracked.Count,
+                            initialLoadEmptyProcessed + initialLoadEmptyPendingUnload.Count);
+                        initialLoadProgress = effectiveTotal > 0
+                            ? Mathf.Clamp01(initialLoadEmptyProcessed / (float)effectiveTotal)
+                            : 0f;
+                    }
+                    else
+                    {
+                        CompleteInitialLoad();
+                    }
+                }
+                break;
+            }
+            case InitialLoadStage.ProcessingTerrainCache:
+            {
+                int pendingTerrain = Mathf.Max(0, TerrainAnalysisCache.GetPendingSaveCount());
+                initialLoadTerrainTotal = Mathf.Max(initialLoadTerrainTotal, pendingTerrain);
+                if (initialLoadTerrainTotal <= 0)
+                {
+                    initialLoadTerrainTotal = 1;
+                }
+                initialLoadTerrainProcessed = Mathf.Clamp(initialLoadTerrainTotal - pendingTerrain, 0, initialLoadTerrainTotal);
+
+                initialLoadProgress = initialLoadTerrainTotal > 0
+                    ? Mathf.Clamp01(initialLoadTerrainProcessed / (float)initialLoadTerrainTotal)
+                    : 1f;
+
+                if (pendingTerrain == 0 && !TerrainAnalysisCache.HasPendingWork())
+                {
+                    TerrainAnalysisCache.SetSynchronousFlushMode(false);
+                    initialLoadTerrainProcessed = initialLoadTerrainTotal;
+
+                    bool hasEmptyWork = initialLoadEmptyTracked.Count > 0 ||
+                                        initialLoadEmptyPendingUnload.Count > 0 ||
+                                        initialLoadEmptyUnloadQueue.Count > 0;
 
                     if (hasEmptyWork)
                     {
                         initialLoadStage = InitialLoadStage.UnloadingEmptyChunks;
-                        initialLoadProgress = initialLoadEmptyTotal > 0
-                            ? Mathf.Clamp01(initialLoadEmptyProcessed / (float)initialLoadEmptyTotal)
+                        int effectiveTotal = Mathf.Max(initialLoadEmptyTracked.Count,
+                            initialLoadEmptyProcessed + initialLoadEmptyPendingUnload.Count);
+                        initialLoadProgress = effectiveTotal > 0
+                            ? Mathf.Clamp01(initialLoadEmptyProcessed / (float)effectiveTotal)
                             : 0f;
                     }
                     else
@@ -1150,25 +1268,43 @@ public class World : MonoBehaviour
         if (!initialLoadInProgress && initialLoadStage == InitialLoadStage.Complete)
             return;
 
+        int pendingTerrain = TerrainAnalysisCache.GetPendingSaveCount();
+        bool terrainWorkPending = pendingTerrain > 0 || TerrainAnalysisCache.HasPendingWork();
+
+        if (terrainWorkPending)
+        {
+            if (initialLoadStage != InitialLoadStage.ProcessingTerrainCache)
+            {
+                initialLoadStage = InitialLoadStage.ProcessingTerrainCache;
+                TerrainAnalysisCache.SetSynchronousFlushMode(true);
+            }
+
+            initialLoadTerrainTotal = Mathf.Max(initialLoadTerrainTotal, pendingTerrain);
+            if (initialLoadTerrainTotal <= 0)
+            {
+                initialLoadTerrainTotal = 1;
+            }
+            initialLoadTerrainProcessed = Mathf.Clamp(initialLoadTerrainTotal - pendingTerrain, 0, initialLoadTerrainTotal);
+
+            initialLoadInProgress = true;
+            UpdateInitialLoadProgressState();
+            return;
+        }
+
         int pendingEmptyCount = initialLoadEmptyPendingUnload.Count;
         int effectiveEmptyTotal = Mathf.Max(initialLoadEmptyTracked.Count, initialLoadEmptyProcessed + pendingEmptyCount);
         bool hasPendingEmptyWork = pendingEmptyCount > 0 ||
                                    initialLoadEmptyUnloadQueue.Count > 0 ||
-                                   effectiveEmptyTotal > initialLoadEmptyProcessed;
+                                   effectiveEmptyTotal > initialLoadEmptyProcessed ||
+                                   (operationsQueue != null && operationsQueue.HasPendingUnloadOperations());
 
-        if (initialLoadStage == InitialLoadStage.LoadingChunks && hasPendingEmptyWork)
+        if (hasPendingEmptyWork)
         {
-            initialLoadStage = InitialLoadStage.UnloadingEmptyChunks;
-            initialLoadProgress = effectiveEmptyTotal > 0
-                ? Mathf.Clamp01(initialLoadEmptyProcessed / (float)effectiveEmptyTotal)
-                : 0f;
-            UpdateInitialLoadUI();
-            return;
-        }
+            if (initialLoadStage != InitialLoadStage.UnloadingEmptyChunks)
+            {
+                initialLoadStage = InitialLoadStage.UnloadingEmptyChunks;
+            }
 
-        if (initialLoadStage == InitialLoadStage.UnloadingEmptyChunks &&
-            hasPendingEmptyWork)
-        {
             initialLoadProgress = effectiveEmptyTotal > 0
                 ? Mathf.Clamp01(initialLoadEmptyProcessed / (float)effectiveEmptyTotal)
                 : 0f;
@@ -1180,16 +1316,15 @@ public class World : MonoBehaviour
         initialLoadInProgress = false;
         initialLoadProgress = 1f;
 
+        TerrainAnalysisCache.SetSynchronousFlushMode(false);
+        initialLoadTerrainTotal = 0;
+        initialLoadTerrainProcessed = 0;
+
         if (!initialLoadCompletionBroadcasted)
         {
             initialLoadCompletionBroadcasted = true;
             float elapsed = initialLoadStartTime > 0f ? Time.time - initialLoadStartTime : 0f;
             Debug.Log($"Initial world load completed in {elapsed:F1}s ({initialLoadTargets.Count} chunks).");
-        }
-
-        if (operationsQueue != null && initialLoadEmptyUnloadQueue.Count > 0)
-        {
-            ProcessInitialLoadEmptyUnloads(initialLoadEmptyUnloadQueue.Count);
         }
 
         initialLoadEmptyPendingUnload.Clear();
@@ -1221,6 +1356,20 @@ public class World : MonoBehaviour
                         : "Preparing terrain...";
                     break;
                 }
+                case InitialLoadStage.ProcessingTerrainCache:
+                {
+                    int pending = Mathf.Max(0, TerrainAnalysisCache.GetPendingSaveCount());
+                    int displayTotal = Mathf.Max(initialLoadTerrainTotal, pending);
+                    if (displayTotal <= 0)
+                    {
+                        displayTotal = 1;
+                    }
+                    int displayProcessed = Mathf.Clamp(displayTotal - pending, 0, displayTotal);
+                    status = displayTotal > 0
+                        ? $"Caching terrain {displayProcessed}/{displayTotal}"
+                        : "Caching terrain...";
+                    break;
+                }
                 case InitialLoadStage.UnloadingEmptyChunks:
                 {
                     int displayTotal = Mathf.Max(initialLoadEmptyTotal, initialLoadEmptyProcessed + initialLoadEmptyPendingUnload.Count);
@@ -1241,6 +1390,77 @@ public class World : MonoBehaviour
         float progressValue = Mathf.Clamp01(initialLoadProgress);
 
         GameUIManager.Instance.SetGameplayLoadingOverlay(show, progressValue, status);
+    }
+    
+    private void CleanupStaleInitialLoadEntries()
+    {
+        if (!initialLoadInProgress || initialLoadPending.Count == 0)
+            return;
+
+        if (operationsQueue == null)
+        {
+            operationsQueue = ChunkOperationsQueue.Instance;
+        }
+
+        List<Vector3Int> staleEntries = null;
+        var pendingSnapshot = initialLoadPending.ToArray();
+
+        foreach (var chunkCoord in pendingSnapshot)
+        {
+            var state = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+            bool chunkExists = chunks.ContainsKey(chunkCoord);
+            bool hasActiveLoad = operationsQueue != null && operationsQueue.HasPendingLoadOperation(chunkCoord);
+            bool isQuarantined = ChunkStateManager.Instance.QuarantinedChunks.Contains(chunkCoord);
+
+            bool stillLoading = state.Status == ChunkConfigurations.ChunkStatus.Loading ||
+                                state.Status == ChunkConfigurations.ChunkStatus.None;
+
+            if (stillLoading && (hasActiveLoad || chunkExists))
+            {
+                continue;
+            }
+
+            bool shouldComplete = false;
+
+            if (chunkExists && (state.Status == ChunkConfigurations.ChunkStatus.Loaded ||
+                                state.Status == ChunkConfigurations.ChunkStatus.Modified))
+            {
+                shouldComplete = true;
+            }
+            else if (!chunkExists && !hasActiveLoad &&
+                     (state.Status == ChunkConfigurations.ChunkStatus.Unloaded ||
+                      state.Status == ChunkConfigurations.ChunkStatus.Unloading))
+            {
+                shouldComplete = true;
+            }
+            else if (isQuarantined)
+            {
+                shouldComplete = true;
+            }
+
+            if (shouldComplete)
+            {
+                staleEntries ??= new List<Vector3Int>();
+                staleEntries.Add(chunkCoord);
+            }
+        }
+
+        if (staleEntries == null || staleEntries.Count == 0)
+            return;
+
+        foreach (var chunkCoord in staleEntries)
+        {
+            if (initialLoadPending.Remove(chunkCoord))
+            {
+                if (config != null && config.enableChunkLifecycleLogs)
+                {
+                    var state = ChunkStateManager.Instance.GetChunkState(chunkCoord).Status;
+                    Debug.LogWarning($"[InitialLoad] Marking stale pending chunk {chunkCoord} as complete (state: {state})");
+                }
+            }
+        }
+
+        UpdateInitialLoadProgressState();
     }
     #endregion
 
@@ -2504,7 +2724,7 @@ public class World : MonoBehaviour
 
                 if ((isEmpty || isSolid) && !HasPendingUpdates(chunkCoord))
                 {
-                    if (initialLoadInProgress && isEmpty)
+                    if (initialLoadInProgress)
                     {
                         QueueInitialLoadEmptyChunk(chunkCoord);
                     }
@@ -2526,7 +2746,7 @@ public class World : MonoBehaviour
 
                 if ((isEmpty || isSolid) && !HasPendingUpdates(chunkCoord))
                 {
-                    if (initialLoadInProgress && isEmpty)
+                    if (initialLoadInProgress)
                     {
                         QueueInitialLoadEmptyChunk(chunkCoord);
                     }
