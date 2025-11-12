@@ -188,6 +188,21 @@ public class ChunkData : System.IDisposable
             return false;
         }
 
+        // CRITICAL FIX: Check for pending updates and marked for modification BEFORE using cached data
+        // This ensures chunks that need modifications don't skip full loading even if they're queued before mining operations
+        if (World.Instance.HasPendingUpdates(coord))
+        {
+            LogQuickCheck($"[QuickCheck] Chunk {coord} has pending updates, no early exit");
+            return false;
+        }
+
+        // Skip if marked for modification
+        if (World.Instance.IsSolidChunkMarkedForModification(coord))
+        {
+            LogQuickCheck($"[QuickCheck] Solid chunk {coord} marked for modification, no early exit");
+            return false;
+        }
+
         // First: Check terrain analysis cache
         bool cacheHasValidData = false;
         if (TerrainAnalysisCache.TryGetAnalysis(coord, out var analysisData))
@@ -212,19 +227,6 @@ public class ChunkData : System.IDisposable
         // If we have valid cache data OR we need to sample the densities
         if (cacheHasValidData || densityPoints.IsCreated)
         {
-            // Skip if pending updates exist
-            if (World.Instance.HasPendingUpdates(coord))
-            {
-                LogQuickCheck($"[QuickCheck] Chunk {coord} has pending updates, no early exit");
-                return false;
-            }
-
-            // Skip if marked for modification
-            if (World.Instance.IsSolidChunkMarkedForModification(coord))
-            {
-                LogQuickCheck($"[QuickCheck] Solid chunk {coord} marked for modification, no early exit");
-                return false;
-            }
 
             // If we don't have cache data, we need to sample densities
             if (!cacheHasValidData && densityPoints.IsCreated)

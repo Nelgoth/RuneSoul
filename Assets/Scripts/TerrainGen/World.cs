@@ -121,8 +121,14 @@ public class World : MonoBehaviour
     private HashSet<Vector3Int> chunksBeingValidated = new HashSet<Vector3Int>();
     private Dictionary<Vector3Int, float> loadValidationCache = new Dictionary<Vector3Int, float>();
     private const float VALIDATION_CACHE_TIME = 0.1f; // Cache results for 100ms
+    private const float NearbyChunkAccessRefreshInterval = 2f;
+    private const int NearbyChunkHorizontalRadius = 5;
+    private const int NearbyChunkVerticalRadius = 3;
+    private const float ImmediateLoadDistanceThreshold = 5f;
 
     private HashSet<Vector3Int> modifiedSolidChunks = new HashSet<Vector3Int>();
+    private float lastNearbyAccessRefreshTime = -10f;
+    private readonly List<Vector3Int> accessTouchCenters = new List<Vector3Int>();
     private Dictionary<ulong, Vector3> activePlayerPositions = new Dictionary<ulong, Vector3>();
     private Dictionary<ulong, Vector3Int> playerChunkCoordinates = new Dictionary<ulong, Vector3Int>();
     private HashSet<Vector3Int> activeChunkCoords = new HashSet<Vector3Int>();
@@ -565,6 +571,7 @@ public class World : MonoBehaviour
             UpdateChunks(playerPosition);
         }
 
+        RefreshNearbyChunkAccessTimes();
         ProcessPendingUpdates();
         ProcessMeshUpdates();
     }
@@ -818,8 +825,8 @@ public class World : MonoBehaviour
         {
             Vector3Int coord = loadCandidates[i];
             // Prioritize chunks that are very close to players
-            bool immediate = GetMinDistanceToPlayers(coord) <= 2;
-            operationsQueue.QueueChunkForLoad(coord, immediate);
+            bool immediate = GetMinDistanceToPlayers(coord) <= ImmediateLoadDistanceThreshold;
+            operationsQueue.QueueChunkForLoad(coord, immediate, quickCheck: !immediate);
         }
         
         if (count > 0 && Time.frameCount % 300 == 0)
@@ -860,36 +867,6 @@ public class World : MonoBehaviour
             state.Status != ChunkConfigurations.ChunkStatus.Modified)
             return false;
             
-        // Check for age-based forcing
-        float timeSinceAccess = Time.time - chunk.lastAccessTime;
-        
-        // Force unload for chunks that haven't been accessed in over 5 minutes
-        // regardless of other conditions, as long as no player is extremely close
-        bool shouldForceUnload = timeSinceAccess > 300f; // 5 minutes
-        
-        if (shouldForceUnload)
-        {
-            bool playerVeryClose = false;
-            
-            foreach (var playerEntry in playerChunkCoordinates)
-            {
-                Vector3Int playerChunk = playerEntry.Value;
-                float distance = Vector3Int.Distance(chunkCoord, playerChunk);
-                if (distance <= 3) // Within 3 chunks
-                {
-                    playerVeryClose = true;
-                    break;
-                }
-            }
-            
-            // Force unload old chunks except when players are very close
-            if (!playerVeryClose)
-            {
-                Debug.Log($"Forcing unload of chunk {chunkCoord} - not accessed for {timeSinceAccess:F0} seconds");
-                return true;
-            }
-        }
-        
         // Calculate minimum distance to any player
         float minDistanceToPlayers = float.MaxValue;
         
@@ -1483,6 +1460,7 @@ public class World : MonoBehaviour
         return voxelPos;
     }
 
+
     public void HandleVoxelDestruction(Vector3Int chunkCoord, Vector3Int voxelPos)
     {   
         if (currentlyProcessingChunks.Contains(chunkCoord))
@@ -1516,10 +1494,15 @@ public class World : MonoBehaviour
             var affectedChunks = GetAffectedChunks(worldPos, radius);
             
             // CRITICAL FIX: Always invalidate terrain analysis for ALL affected chunks
+            // AND queue density updates IMMEDIATELY to prevent race conditions with QuickCheck
             foreach (var neighborCoord in affectedChunks)
             {
                 // Always invalidate the analysis - this ensures we don't skip loading modified chunks
                 TerrainAnalysisCache.InvalidateAnalysis(neighborCoord);
+                
+                // CRITICAL: Queue density update IMMEDIATELY before checking if chunk is loaded
+                // This ensures QuickCheck will see pending updates even if chunk is already queued for loading
+                QueueDensityUpdate(neighborCoord, worldPos);
                 
                 // Check for solid chunks and mark them for modification
                 if (TerrainAnalysisCache.TryGetAnalysis(neighborCoord, out var analysis) && analysis.IsSolid)
@@ -1545,9 +1528,7 @@ public class World : MonoBehaviour
                 }
                 else
                 {
-                    // If we couldn't load the chunk, queue updates for later
-                    QueueDensityUpdate(neighborCoord, worldPos);
-                    
+                    // Density update already queued above, just request immediate load
                     // Request immediate load
                     if (TerrainAnalysisCache.TryGetAnalysis(neighborCoord, out var analysis) && analysis.IsSolid)
                     {
@@ -2429,7 +2410,10 @@ public class World : MonoBehaviour
                                     
             try
             {
-                operationsQueue.QueueChunkForLoad(chunkCoord, hasPendingUpdates);
+                operationsQueue.QueueChunkForLoad(
+                    chunkCoord,
+                    immediate: hasPendingUpdates,
+                    quickCheck: !hasPendingUpdates);
             }
             catch (Exception e)
             {
@@ -2860,12 +2844,62 @@ public class World : MonoBehaviour
         }
     }
 
+    private void RefreshNearbyChunkAccessTimes()
+    {
+        if (chunks.Count == 0)
+            return;
+
+        if (Time.time - lastNearbyAccessRefreshTime < NearbyChunkAccessRefreshInterval)
+            return;
+
+        lastNearbyAccessRefreshTime = Time.time;
+
+        accessTouchCenters.Clear();
+
+        if (playerChunkCoordinates.Count > 0)
+        {
+            foreach (var entry in playerChunkCoordinates)
+            {
+                accessTouchCenters.Add(entry.Value);
+            }
+        }
+        else if (lastPlayerChunkCoordinates != Vector3Int.zero)
+        {
+            accessTouchCenters.Add(lastPlayerChunkCoordinates);
+        }
+
+        if (accessTouchCenters.Count == 0)
+            return;
+
+        int verticalRadius = Mathf.Max(NearbyChunkVerticalRadius, Mathf.Max(1, verticalLoadRadius));
+
+        foreach (var center in accessTouchCenters)
+        {
+            TouchChunksAround(center, NearbyChunkHorizontalRadius, verticalRadius);
+        }
+    }
+
+    private void TouchChunksAround(Vector3Int center, int horizontalRadius, int verticalRadius)
+    {
+        for (int x = -horizontalRadius; x <= horizontalRadius; x++)
+        for (int z = -horizontalRadius; z <= horizontalRadius; z++)
+        for (int y = -verticalRadius; y <= verticalRadius; y++)
+        {
+            Vector3Int coord = center + new Vector3Int(x, y, z);
+
+            if (chunks.TryGetValue(coord, out var chunk))
+            {
+                chunk.UpdateAccessTime();
+            }
+        }
+    }
+
     private void UpdateChunks(Vector3Int centerChunkCoordinates)
     {
         if (ShouldLoadChunk(centerChunkCoordinates))
         {
-            // CHANGE THIS LINE - Enable quickCheck for center chunk
-            operationsQueue.QueueChunkForLoad(centerChunkCoordinates, true, true);
+            // Always perform a full load for the center chunk to avoid quick-check shortcuts
+            operationsQueue.QueueChunkForLoad(centerChunkCoordinates, immediate: true, quickCheck: false);
             
             // Also load immediate neighbors
             for (int x = -1; x <= 1; x++)
@@ -2874,8 +2908,7 @@ public class World : MonoBehaviour
                 Vector3Int neighborCoord = centerChunkCoordinates + new Vector3Int(x, 0, z);
                 if (ShouldLoadChunk(neighborCoord))
                 {
-                    // CHANGE THIS LINE - Enable quickCheck for neighbors
-                    operationsQueue.QueueChunkForLoad(neighborCoord, true, true);
+                    operationsQueue.QueueChunkForLoad(neighborCoord, immediate: true, quickCheck: false);
                 }
             }
         }
@@ -2929,10 +2962,9 @@ public class World : MonoBehaviour
         // Queue chunks in distance order
         foreach (var request in loadRequests)
         {
-            bool immediate = request.Distance <= 2; // Immediate load for very close chunks
+            bool immediate = request.Distance <= ImmediateLoadDistanceThreshold;
             
-            // CHANGE THIS LINE - Make sure quickCheck is true
-            operationsQueue.QueueChunkForLoad(request.Coordinate, immediate, true);
+            operationsQueue.QueueChunkForLoad(request.Coordinate, immediate, quickCheck: !immediate);
         }
 
         // Process unloading
@@ -3111,8 +3143,9 @@ public class World : MonoBehaviour
         
         // CRITICAL FIX: Create a new analysis entry explicitly marking this chunk as modified
         TerrainAnalysisCache.SaveAnalysis(chunkCoord, false, false, true);
+        TerrainAnalysisCache.ProcessPendingSavesImmediate(1);
         
-        // Also invalidate the terrain analysis for this chunk
+        // Also invalidate the terrain analysis for this chunk so future loads recalculate
         TerrainAnalysisCache.InvalidateAnalysis(chunkCoord);
         
         // Remove from validation cache to force re-evaluation
@@ -3283,7 +3316,7 @@ public class World : MonoBehaviour
                 ChunkConfigurations.ChunkStateFlags.None))
             {
                 // Request new load
-                operationsQueue.QueueChunkForLoad(chunkCoord, true);
+                operationsQueue.QueueChunkForLoad(chunkCoord, immediate: true, quickCheck: false);
                 return true;
             }
         }

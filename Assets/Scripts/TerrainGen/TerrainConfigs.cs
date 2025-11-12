@@ -87,8 +87,7 @@ public class TerrainConfigs : ScriptableObject
     [Tooltip("Target FPS")]
     [Range(30, 120)]
     public int TargetFPS = 60;
-    [Tooltip("Initial vertex buffer size per mesh")]
-    
+
 
     [Header("Visual Settings")]
     public Material VoxelMaterial;
@@ -161,7 +160,6 @@ public class TerrainConfigs : ScriptableObject
         initialLoadChunkMultiplier = Mathf.Max(1f, initialLoadChunkMultiplier);
         maxInitialLoadChunksPerFrame = Mathf.Max(ChunksPerFrame, maxInitialLoadChunksPerFrame);
         manualChunkPoolSize = Mathf.Max(1, manualChunkPoolSize);
-        
         // Scale vertex buffer with chunk size
         int expectedVertices = chunkSize * chunkSize * chunkSize / 4;
         meshVertexBufferSize = Mathf.Max(meshVertexBufferSize, expectedVertices);

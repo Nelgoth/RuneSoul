@@ -103,7 +103,29 @@ public class ChunkOperationsQueue : MonoBehaviour
             total += queue.Count;
         }
         total += loadQueue.Count + unloadQueue.Count;
+
+        total += activeOperations.Count;
+
         return total;
+    }
+
+    public bool HasPendingUnloadOperations()
+    {
+        if (unloadQueue.Count > 0 || unloadingChunks.Count > 0)
+            return true;
+
+        if (activeOperations.Any(pair => pair.Value.Type == OperationType.Unload))
+            return true;
+
+        foreach (var queue in operationQueues.Values)
+        {
+            if (queue.Any(op => op.Type == OperationType.Unload))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public bool HasPendingLoadOperation(Vector3Int chunkCoord)
@@ -335,6 +357,10 @@ public class ChunkOperationsQueue : MonoBehaviour
         int maxOpsThisFrame = CalculateDynamicOperationsLimit();
         int opsProcessed = 0;
         bool prioritizeInitialEmptyUnloads = World.Instance != null && World.Instance.IsInitialLoadUnloadingEmptyChunks;
+        if (prioritizeInitialEmptyUnloads)
+        {
+            maxOpsThisFrame = int.MaxValue;
+        }
 
         // Process critical operations first
         opsProcessed = ProcessOperationsForPriority(OperationPriority.Critical, opsProcessed, maxOpsThisFrame);
@@ -342,10 +368,26 @@ public class ChunkOperationsQueue : MonoBehaviour
 
         // Process a minimal set of unloads to free resources (max 2 per frame)
         int unloadsToProcess = prioritizeInitialEmptyUnloads
-            ? Mathf.Max(1, maxOpsThisFrame - opsProcessed)
+            ? Mathf.Max(1, unloadQueue.Count)
             : Mathf.Min(2, maxOpsThisFrame - opsProcessed);
         opsProcessed += ProcessUnloadOperations(unloadsToProcess);
-        if (opsProcessed >= maxOpsThisFrame || prioritizeInitialEmptyUnloads) return;
+        if (prioritizeInitialEmptyUnloads)
+        {
+            while (unloadQueue.Count > 0 && opsProcessed < maxOpsThisFrame)
+            {
+                int remainingCapacity = maxOpsThisFrame - opsProcessed;
+                if (remainingCapacity <= 0)
+                    break;
+
+                int batchSize = Mathf.Clamp(unloadQueue.Count, 1, remainingCapacity);
+                int before = opsProcessed;
+                opsProcessed += ProcessUnloadOperations(batchSize);
+
+                if (opsProcessed == before)
+                    break;
+            }
+        }
+        if (opsProcessed >= maxOpsThisFrame) return;
 
         // Process remaining operations by priority, with lower limits per priority
         var remainingOps = maxOpsThisFrame - opsProcessed;
@@ -369,9 +411,17 @@ public class ChunkOperationsQueue : MonoBehaviour
         // Start with the config default
         int baseLimit = MeshDataPool.Instance.GetDynamicChunksPerFrame();
 
-        if (World.Instance != null && World.Instance.IsInitialLoadInProgress)
+        if (World.Instance != null)
         {
-            return Mathf.Max(World.Instance.Config.minChunksPerFrame, World.Instance.InitialLoadChunkBudget);
+            if (World.Instance.IsInitialLoadUnloadingEmptyChunks)
+            {
+                return Mathf.Max(baseLimit, World.Instance.InitialEmptyChunksTotal);
+            }
+
+            if (World.Instance.IsInitialLoadInProgress)
+            {
+                return Mathf.Max(World.Instance.Config.minChunksPerFrame, World.Instance.InitialLoadChunkBudget);
+            }
         }
         
         // Check memory pressure
