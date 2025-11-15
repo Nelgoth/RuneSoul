@@ -181,10 +181,20 @@ public class ChunkData : System.IDisposable
     {
         LogQuickCheck($"[QuickCheck] Running for chunk {coord}");
         
+        // Log chunk trace if enabled
+        if (World.Instance != null && World.Instance.IsChunkTraced(coord))
+        {
+            Debug.Log($"[CHUNK_TRACE:{coord}] QuickTerrainCheck starting");
+        }
+        
         // Zero: Skip quick check if chunk is already known to be modified
         if (HasModifiedData)
         {
             LogQuickCheck($"[QuickCheck] Chunk {coord} has local modifications, no early exit");
+            if (World.Instance != null && World.Instance.IsChunkTraced(coord))
+            {
+                Debug.Log($"[CHUNK_TRACE:{coord}] QuickTerrainCheck: HasModifiedData=true, returning false");
+            }
             return false;
         }
 
@@ -193,6 +203,10 @@ public class ChunkData : System.IDisposable
         if (World.Instance.HasPendingUpdates(coord))
         {
             LogQuickCheck($"[QuickCheck] Chunk {coord} has pending updates, no early exit");
+            if (World.Instance != null && World.Instance.IsChunkTraced(coord))
+            {
+                Debug.Log($"[CHUNK_TRACE:{coord}] QuickTerrainCheck: HasPendingUpdates=true, returning false");
+            }
             return false;
         }
 
@@ -200,6 +214,10 @@ public class ChunkData : System.IDisposable
         if (World.Instance.IsSolidChunkMarkedForModification(coord))
         {
             LogQuickCheck($"[QuickCheck] Solid chunk {coord} marked for modification, no early exit");
+            if (World.Instance != null && World.Instance.IsChunkTraced(coord))
+            {
+                Debug.Log($"[CHUNK_TRACE:{coord}] QuickTerrainCheck: IsSolidChunkMarkedForModification=true, returning false");
+            }
             return false;
         }
 
@@ -260,9 +278,21 @@ public class ChunkData : System.IDisposable
                 isEmptyChunk = !hasUnderSurface;
                 isSolidChunk = !hasOverSurface;
                 
-                // Save analysis for future reference
-                TerrainAnalysisCache.SaveAnalysis(coord, isEmptyChunk, isSolidChunk, false);
-                LogQuickCheck($"[QuickCheck] Sampled chunk {coord}: Empty={isEmptyChunk}, Solid={isSolidChunk}");
+                // CRITICAL FIX: Don't save analysis if this chunk or its neighbors have pending updates
+                // This prevents race conditions where cache is saved before density modifications are applied
+                bool hasPendingUpdates = World.Instance.HasPendingUpdates(coord);
+                bool hasNeighborUpdates = CheckNeighborsForUpdates(coord);
+                
+                if (hasPendingUpdates || hasNeighborUpdates)
+                {
+                    LogQuickCheck($"[QuickCheck] NOT saving analysis for chunk {coord} - hasPendingUpdates: {hasPendingUpdates}, neighborHasUpdates: {hasNeighborUpdates}");
+                }
+                else
+                {
+                    // Save analysis for future reference
+                    TerrainAnalysisCache.SaveAnalysis(coord, isEmptyChunk, isSolidChunk, false);
+                    LogQuickCheck($"[QuickCheck] Sampled chunk {coord}: Empty={isEmptyChunk}, Solid={isSolidChunk}");
+                }
             }
             
             // By this point we have determined if it's empty/solid either from cache or sampling

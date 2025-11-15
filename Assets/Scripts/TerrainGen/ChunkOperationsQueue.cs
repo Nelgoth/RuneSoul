@@ -202,6 +202,13 @@ public class ChunkOperationsQueue : MonoBehaviour
         );
 
         EnqueueOperation(operation);
+        
+        // Log chunk trace if enabled
+        if (World.Instance != null && World.Instance.IsChunkTraced(chunkCoord))
+        {
+            bool effectiveQuickCheck = isSolidModified ? false : quickCheck;
+            Debug.Log($"[CHUNK_TRACE:{chunkCoord}] QueueChunkForLoad - Immediate: {immediate}, QuickCheck: {effectiveQuickCheck}, Priority: {newPriority}, State: {state.Status}");
+        }
 
         if (World.Instance != null)
         {
@@ -635,10 +642,20 @@ public class ChunkOperationsQueue : MonoBehaviour
         try
         {
             var state = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+            
+            // Log chunk trace if enabled
+            if (World.Instance != null && World.Instance.IsChunkTraced(chunkCoord))
+            {
+                Debug.Log($"[CHUNK_TRACE:{chunkCoord}] ProcessLoadOperation starting - QuickCheck: {quickCheck}, CurrentState: {state.Status}");
+            }
 
             // 1) Abort if chunk already loaded
             if (World.Instance.TryGetChunk(chunkCoord, out _))
             {
+                if (World.Instance != null && World.Instance.IsChunkTraced(chunkCoord))
+                {
+                    Debug.Log($"[CHUNK_TRACE:{chunkCoord}] ProcessLoadOperation aborted - chunk already loaded");
+                }
                 return false;
             }
 
@@ -649,6 +666,10 @@ public class ChunkOperationsQueue : MonoBehaviour
                 ChunkConfigurations.ChunkStateFlags.None))
             {
                 Debug.LogWarning($"[ChunkQueue] Failed to change state to Loading for chunk {chunkCoord}");
+                if (World.Instance != null && World.Instance.IsChunkTraced(chunkCoord))
+                {
+                    Debug.Log($"[CHUNK_TRACE:{chunkCoord}] ProcessLoadOperation FAILED - state transition failed from {state.Status}");
+                }
                 return false;
             }
 

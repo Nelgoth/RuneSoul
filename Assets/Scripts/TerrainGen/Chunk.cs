@@ -478,13 +478,23 @@ public class Chunk : MonoBehaviour
                     // Notify World of completion
                     World.Instance.OnChunkGenerationComplete(chunkCoord);
                     
-                    // Save terrain analysis for future reference
-                    TerrainAnalysisCache.SaveAnalysis(
-                        chunkData.ChunkCoordinate,
-                        chunkData.IsEmptyChunk,
-                        chunkData.IsSolidChunk,
-                        false // not modified
-                    );
+                    // CRITICAL FIX: Only save terrain analysis if there are NO pending updates
+                    // This prevents saving stale cache data before density modifications are applied
+                    // The analysis will be saved later after updates are processed
+                    if (!World.Instance.HasPendingUpdates(chunkData.ChunkCoordinate))
+                    {
+                        // Save terrain analysis for future reference
+                        TerrainAnalysisCache.SaveAnalysis(
+                            chunkData.ChunkCoordinate,
+                            chunkData.IsEmptyChunk,
+                            chunkData.IsSolidChunk,
+                            false // not modified
+                        );
+                    }
+                    else
+                    {
+                        Debug.Log($"[Chunk] NOT saving terrain analysis for chunk {chunkData.ChunkCoordinate} - has pending updates");
+                    }
                     
                     // Check if there are any pending updates before deciding to unload
                     if (!World.Instance.HasPendingUpdates(chunkData.ChunkCoordinate))
@@ -932,6 +942,76 @@ public class Chunk : MonoBehaviour
             return chunkData.DensityPoints[index].density;
         }
         return 1f; // Return value indicating outside surface
+    }
+
+    /// <summary>
+    /// Initialize density arrays for QuickCheck chunks that have pending updates.
+    /// This ensures density arrays have correct baseline values before modifications are applied.
+    /// </summary>
+    public void InitializeQuickCheckChunkDensity()
+    {
+        // CRITICAL: Check if chunkData exists before accessing it
+        if (chunkData == null)
+        {
+            Debug.LogError($"[InitializeQuickCheckChunkDensity] chunkData is null - cannot initialize");
+            return;
+        }
+        
+        EnsureDataInitialized();
+        CompleteAllJobs();
+        
+        if (!chunkData.DensityPoints.IsCreated)
+        {
+            Debug.LogError($"[InitializeQuickCheckChunkDensity] Density array not created for chunk {chunkData.ChunkCoordinate}");
+            return;
+        }
+        
+        bool isEmpty = chunkData.IsEmptyChunk;
+        bool isSolid = chunkData.IsSolidChunk;
+        
+        if (!isEmpty && !isSolid)
+        {
+            // Not a QuickCheck chunk, skip initialization
+            return;
+        }
+        
+        int totalPointsPerAxis = chunkData.TotalPointsPerAxis;
+        float baselineDensity;
+        
+        if (isSolid)
+        {
+            // Solid chunks: all density values should be above surfaceLevel (outside surface)
+            baselineDensity = chunkData.SurfaceLevel + 2.0f;
+            Debug.Log($"[InitializeQuickCheckChunkDensity] Initializing SOLID chunk {chunkData.ChunkCoordinate} with baseline density {baselineDensity}");
+        }
+        else // isEmpty
+        {
+            // Empty chunks: all density values should be below surfaceLevel (inside/under surface)
+            baselineDensity = chunkData.SurfaceLevel - 2.0f;
+            Debug.Log($"[InitializeQuickCheckChunkDensity] Initializing EMPTY chunk {chunkData.ChunkCoordinate} with baseline density {baselineDensity}");
+        }
+        
+        // Initialize all density points with baseline value
+        for (int x = 0; x < totalPointsPerAxis; x++)
+        for (int y = 0; y < totalPointsPerAxis; y++)
+        for (int z = 0; z < totalPointsPerAxis; z++)
+        {
+            Vector3Int densityPos = new Vector3Int(x, y, z);
+            int index = Coord.GetDensityPointIndex(densityPos, totalPointsPerAxis);
+            
+            if (index >= 0 && index < chunkData.DensityPoints.Length)
+            {
+                // Only initialize if density is at default/uninitialized value (0 or very close to 0)
+                // This prevents overwriting already-initialized values
+                float currentDensity = chunkData.DensityPoints[index].density;
+                if (Mathf.Abs(currentDensity) < 0.01f)
+                {
+                    chunkData.SetDensityPoint(index, new DensityPoint(new float3(x, y, z), baselineDensity));
+                }
+            }
+        }
+        
+        Debug.Log($"[InitializeQuickCheckChunkDensity] Completed initialization for {(isSolid ? "SOLID" : "EMPTY")} chunk {chunkData.ChunkCoordinate}");
     }
 
     public Voxel GetVoxel(Vector3Int voxelPosition)
