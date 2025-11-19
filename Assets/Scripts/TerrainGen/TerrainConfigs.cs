@@ -118,6 +118,8 @@ public class TerrainConfigs : ScriptableObject
     public bool enableChunkLifecycleLogs = false;
     [Tooltip("Enable detailed quick-check diagnostics during chunk loading")]
     public bool enableQuickCheckLogs = false;
+    [Tooltip("Enable verbose logs for chunk modification and density updates")]
+    public bool enableChunkModificationDiagnostics = false;
 
     public int GetInitialLoadChunkBudget()
     {

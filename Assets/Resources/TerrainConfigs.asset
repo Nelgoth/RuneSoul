@@ -20,18 +20,23 @@ MonoBehaviour:
   MaxMeshCacheSize: 268435456
   memoryPressureThreshold: 0.8
   targetMemoryUsage: 0.5
-  LoadRadius: 30
-  UnloadRadius: 33
+  LoadRadius: 20
+  UnloadRadius: 21
   VerticalLoadRadius: 5
   VerticalUnloadRadius: 6
   ChunksPerFrame: 100
+  minChunksPerFrame: 8
+  chunkProcessingTargetFPS: 40
+  chunkProcessingMinimumFPS: 20
+  initialLoadChunkMultiplier: 12
+  maxInitialLoadChunksPerFrame: 2048
   maxHeight: 64
-  noiseSeed: 1234
-  noiseScale: 0.015
-  frequency: 0.015
+  noiseSeed: 15040
+  noiseScale: 0.9
+  frequency: 0.9
   MaxJobRetries: 3
-  densityInfluenceRadius: 3.5
-  baseDensityStrength: 3
+  densityInfluenceRadius: 2
+  baseDensityStrength: 1
   minDensityChangeThreshold: 0.01
   updateInterval: 0.1
   voxelEpsilon: 0.01
@@ -49,3 +54,12 @@ MonoBehaviour:
   triplanarBlend: 1
   AnalysisCacheExpirationDays: 30
   PermanentlyStoreEmptyChunks: 1
+  autoCalculateChunkPoolSize: 1
+  manualChunkPoolSize: 36000
+  chunkPoolBufferMultiplier: 1.1
+  terrainCacheLogLevel: 1
+  enableChunkIOLogs: 0
+  enableChunkStateLogs: 0
+  enableChunkLifecycleLogs: 0
+  enableQuickCheckLogs: 0
+  enableChunkModificationDiagnostics: 1

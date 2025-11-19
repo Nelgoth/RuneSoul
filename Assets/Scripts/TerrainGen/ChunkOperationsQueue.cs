@@ -164,15 +164,70 @@ public class ChunkOperationsQueue : MonoBehaviour
             quickCheck = false; // Disable quickCheck for modified solid chunks
             Debug.Log($"[ChunkQueue] Forcing full load of modified solid chunk {chunkCoord}");
         }
-        // Skip if chunk is quarantined
+        // Handle quarantined chunks – allow retries after cooldown or if explicitly requested
         if (ChunkStateManager.Instance.QuarantinedChunks.Contains(chunkCoord))
         {
-            Debug.LogWarning($"[ChunkQueue] Skipping load request for quarantined chunk {chunkCoord}");
-            return;
+            bool hasPendingUpdates = World.Instance != null && World.Instance.HasPendingUpdates(chunkCoord);
+            bool isMarkedForMod = World.Instance != null && World.Instance.IsSolidChunkMarkedForModification(chunkCoord);
+            var chunkState = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+            bool cooldownExpired = (DateTime.UtcNow - chunkState.LastStatusChange).TotalSeconds > 5f;
+
+            if (!immediate && !hasPendingUpdates && !isMarkedForMod && !cooldownExpired)
+            {
+                Debug.LogWarning($"[ChunkQueue] Skipping load request for quarantined chunk {chunkCoord} (cooldown active)");
+                return;
+            }
+
+            Debug.LogWarning($"[ChunkQueue] Retrying load for quarantined chunk {chunkCoord} (HasPendingUpdates: {hasPendingUpdates}, IsMarkedForMod: {isMarkedForMod})");
+            ChunkStateManager.Instance.QuarantinedChunks.Remove(chunkCoord);
+
+            if (chunkState.Status == ChunkConfigurations.ChunkStatus.Error)
+            {
+                // Reset back to None so the next transition to Loading is valid
+                ChunkStateManager.Instance.TryChangeState(
+                    chunkCoord,
+                    ChunkConfigurations.ChunkStatus.None,
+                    ChunkConfigurations.ChunkStateFlags.None);
+            }
         }
 
         // Get current chunk state
         var state = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+        
+        // CRITICAL FIX: Handle chunks in Unloading state
+        // If chunk is unloading and has pending updates, we should cancel the unload
+        if (state.Status == ChunkConfigurations.ChunkStatus.Unloading)
+        {
+            bool hasPendingUpdates = World.Instance != null && World.Instance.HasPendingUpdates(chunkCoord);
+            bool isMarkedForMod = World.Instance != null && World.Instance.IsSolidChunkMarkedForModification(chunkCoord);
+            
+            if (hasPendingUpdates || isMarkedForMod)
+            {
+                Debug.LogWarning($"[ChunkQueue] Chunk {chunkCoord} is UNLOADING but has pending updates/modifications - " +
+                    $"attempting to cancel unload. HasPendingUpdates: {hasPendingUpdates}, IsMarkedForMod: {isMarkedForMod}");
+                
+                // Try to transition Unloading -> Unloaded so it can be reloaded
+                if (ChunkStateManager.Instance.TryChangeState(
+                    chunkCoord,
+                    ChunkConfigurations.ChunkStatus.Unloaded,
+                    ChunkConfigurations.ChunkStateFlags.None))
+                {
+                    state = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+                    Debug.Log($"[ChunkQueue] Successfully cancelled unload for chunk {chunkCoord}, new state: {state.Status}");
+                }
+                else
+                {
+                    Debug.LogError($"[ChunkQueue] Failed to cancel unload for chunk {chunkCoord}");
+                    return; // Can't proceed if we can't cancel the unload
+                }
+            }
+            else
+            {
+                // No pending updates, skip this load request and let unload complete
+                Debug.Log($"[ChunkQueue] Skipping load request for chunk {chunkCoord} - currently unloading with no pending updates");
+                return;
+            }
+        }
 
         // Skip if chunk is already loaded or in queue
         if (World.Instance.TryGetChunk(chunkCoord, out _))
@@ -656,7 +711,7 @@ public class ChunkOperationsQueue : MonoBehaviour
                 {
                     Debug.Log($"[CHUNK_TRACE:{chunkCoord}] ProcessLoadOperation aborted - chunk already loaded");
                 }
-                return false;
+                return true;
             }
 
             // Validate state transition

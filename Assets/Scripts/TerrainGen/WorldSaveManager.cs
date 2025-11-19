@@ -41,11 +41,29 @@ public class WorldSaveManager : MonoBehaviour
     private string worldMetadataPath;
     private float lastAutoSaveTime;
     private bool isInitialized = false;
+    private WorldMetadata currentWorldMetadata;
 
     // Public properties
     public string CurrentWorldId => currentWorldId;
     public string WorldSaveFolder => worldSaveFolder;
     public bool IsInitialized => isInitialized;
+    public WorldMetadata CurrentWorldMetadata => currentWorldMetadata;
+
+    public WorldMetadata GetCurrentWorldMetadata(bool forceReload = false)
+    {
+        if (forceReload || currentWorldMetadata == null)
+        {
+            if (string.IsNullOrEmpty(currentWorldId))
+            {
+                Debug.LogWarning("[WorldSaveManager] Cannot reload metadata - no world ID set");
+                return currentWorldMetadata;
+            }
+
+            currentWorldMetadata = LoadWorldMetadata(currentWorldId);
+        }
+
+        return currentWorldMetadata;
+    }
 
     void Awake()
     {
@@ -89,12 +107,13 @@ public class WorldSaveManager : MonoBehaviour
             currentWorldId = "default_world";
             worldSaveFolder = Path.Combine(worldsBaseDir, currentWorldId);
             worldMetadataPath = Path.Combine(worldSaveFolder, "world.meta");
+            WorldMetadata metadata = null;
             
             if (!Directory.Exists(worldSaveFolder))
             {
                 Directory.CreateDirectory(worldSaveFolder);
                 
-                var metadata = new WorldMetadata
+                metadata = new WorldMetadata
                 {
                     WorldId = currentWorldId,
                     WorldName = "Default World",
@@ -106,8 +125,29 @@ public class WorldSaveManager : MonoBehaviour
 
                 SaveWorldMetadata(metadata);
             }
+            else
+            {
+                metadata = LoadWorldMetadata(currentWorldId);
+            }
+
+            if (metadata == null)
+            {
+                metadata = new WorldMetadata
+                {
+                    WorldId = currentWorldId,
+                    WorldName = "Default World",
+                    IsMultiplayerWorld = false,
+                    CreatedDate = DateTime.UtcNow,
+                    LastPlayed = DateTime.UtcNow,
+                    WorldSeed = UnityEngine.Random.Range(1, 99999)
+                };
+                SaveWorldMetadata(metadata);
+            }
+
+            currentWorldMetadata = metadata;
 
             isInitialized = true;
+            TerrainAnalysisCache.ResetCache();
             if (World.Instance != null)
              {
                  World.Instance.ResetTerrainAnalysisCache();
@@ -131,7 +171,7 @@ public class WorldSaveManager : MonoBehaviour
         }
     }
 
-    public void InitializeWorld(string worldName = null, bool isMultiplayer = false)
+    public void InitializeWorld(string worldName = null, bool isMultiplayer = false, int? worldSeedOverride = null)
     {
         Debug.Log($"[WorldSaveManager] Initializing new world. Name: {worldName}, Multiplayer: {isMultiplayer}");
         
@@ -155,11 +195,7 @@ public class WorldSaveManager : MonoBehaviour
             Directory.CreateDirectory(worldSaveFolder);
 
             // Create world seed if needed
-            int worldSeed = UnityEngine.Random.Range(1, 99999);
-            if (PlayerPrefs.HasKey("WorldSeed"))
-            {
-                worldSeed = PlayerPrefs.GetInt("WorldSeed", worldSeed);
-            }
+            int worldSeed = worldSeedOverride ?? UnityEngine.Random.Range(1, 99999);
 
             // Create metadata
             var metadata = new WorldMetadata
@@ -174,9 +210,11 @@ public class WorldSaveManager : MonoBehaviour
 
             // Save metadata
             SaveWorldMetadata(metadata);
+            currentWorldMetadata = metadata;
             
             // Set initialization flag
             isInitialized = true;
+            TerrainAnalysisCache.ResetCache();
             
             Debug.Log($"[WorldSaveManager] World initialized successfully. ID: {currentWorldId}, Name: {metadata.WorldName}, Seed: {worldSeed}");
         }
@@ -216,15 +254,18 @@ public class WorldSaveManager : MonoBehaviour
             WorldName = worldName,
             IsMultiplayerWorld = isMultiplayer,
             CreatedDate = DateTime.UtcNow,
-            LastPlayed = DateTime.UtcNow
+            LastPlayed = DateTime.UtcNow,
+            WorldSeed = 0
         };
 
         SaveWorldMetadata(metadata);
+        currentWorldMetadata = metadata;
         Debug.Log($"[WorldSaveManager] Client world initialized. ID: {currentWorldId}");
         
         // Reset the auto-save timer
         lastAutoSaveTime = Time.time;
         isInitialized = true;
+        TerrainAnalysisCache.ResetCache();
     }
 
     public bool LoadWorld(string worldId)
@@ -261,10 +302,13 @@ public class WorldSaveManager : MonoBehaviour
         {
             metadata.LastPlayed = DateTime.UtcNow;
             SaveWorldMetadata(metadata);
-            Debug.Log($"[WorldSaveManager] World loaded successfully: {metadata.WorldName}");
+            currentWorldMetadata = metadata;
             
             lastAutoSaveTime = Time.time;
             isInitialized = true;
+            TerrainAnalysisCache.ResetCache();
+            Debug.Log($"[WorldSaveManager] World loaded successfully: {metadata.WorldName}");
+            
             return true;
         }
 
@@ -373,6 +417,7 @@ public class WorldSaveManager : MonoBehaviour
             {
                 metadata.LastPlayed = DateTime.UtcNow;
                 SaveWorldMetadata(metadata);
+                currentWorldMetadata = metadata;
             }
 
             // Force save terrain analysis cache

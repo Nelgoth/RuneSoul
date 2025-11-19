@@ -23,6 +23,8 @@ public static class TerrainAnalysisCache
     // Batch processing
     private static readonly HashSet<Vector3Int> pendingSaveCoords = new HashSet<Vector3Int>();
     private static readonly Queue<TerrainAnalysisData> saveBatchQueue = new Queue<TerrainAnalysisData>();
+    private static readonly HashSet<Vector3Int> pendingDeleteCoords = new HashSet<Vector3Int>();
+    private static readonly Queue<Vector3Int> deleteBatchQueue = new Queue<Vector3Int>();
     private const int BATCH_SIZE = 250;
     private const int ACCELERATED_BATCH_SIZE = 8192;
     private static readonly int MAX_CACHE_SIZE = 100000;
@@ -38,6 +40,8 @@ public static class TerrainAnalysisCache
     private static bool hasLoadedPersistentData = false;
     private static string worldId = null;
     private static string worldCacheFolder = null;
+    private static string cachedFolderWorldId = null;
+    private const string DEFAULT_WORLD_ID = "__default";
 
     private static HashSet<Vector3Int> recentlyAnalyzed = new HashSet<Vector3Int>();
     
@@ -159,7 +163,8 @@ public static class TerrainAnalysisCache
     {
         lock (cacheLock)
         {
-            return pendingSaveCoords.Count + saveBatchQueue.Count;
+            return pendingSaveCoords.Count + saveBatchQueue.Count +
+                   pendingDeleteCoords.Count + deleteBatchQueue.Count;
         }
     }
 
@@ -167,7 +172,9 @@ public static class TerrainAnalysisCache
     {
         lock (cacheLock)
         {
-            return pendingSaveCoords.Count > 0 || saveBatchQueue.Count > 0 || currentSaveTask != null;
+            return pendingSaveCoords.Count > 0 || saveBatchQueue.Count > 0 ||
+                   pendingDeleteCoords.Count > 0 || deleteBatchQueue.Count > 0 ||
+                   currentSaveTask != null;
         }
     }
 
@@ -181,50 +188,50 @@ public static class TerrainAnalysisCache
         if (!EnsureInitialized())
             return null;
         
-        // Return cached folder path if we have it
-        if (!string.IsNullOrEmpty(worldCacheFolder) && Directory.Exists(worldCacheFolder))
-            return worldCacheFolder;
-        
         // Thread-safe check for WorldSaveManager - don't access it directly from background threads
         string currentWorldId = worldId;
-        
-        if (string.IsNullOrEmpty(currentWorldId))
+        if (string.IsNullOrEmpty(currentWorldId) && WorldSaveManager.Instance != null && WorldSaveManager.Instance.IsInitialized)
         {
-            // Get the worldId from the main thread safely
-            if (WorldSaveManager.Instance != null && WorldSaveManager.Instance.IsInitialized)
+            currentWorldId = WorldSaveManager.Instance.CurrentWorldId;
+            worldId = currentWorldId;
+            LogMessage($"Updated WorldID to: {worldId}", LogLevel.Debug);
+        }
+
+        string targetWorldKey = string.IsNullOrEmpty(currentWorldId) ? DEFAULT_WORLD_ID : currentWorldId;
+
+        if (!string.IsNullOrEmpty(worldCacheFolder) &&
+            string.Equals(cachedFolderWorldId, targetWorldKey, StringComparison.Ordinal) &&
+            Directory.Exists(worldCacheFolder))
+        {
+            return worldCacheFolder;
+        }
+
+        string folderPath;
+        if (targetWorldKey == DEFAULT_WORLD_ID)
+        {
+            folderPath = Path.Combine(cacheDirectory, "Default");
+            if (!string.Equals(cachedFolderWorldId, targetWorldKey, StringComparison.Ordinal))
             {
-                currentWorldId = WorldSaveManager.Instance.CurrentWorldId;
-                worldId = currentWorldId; // Cache it for future use
-                LogMessage($"Updated WorldID to: {worldId}", LogLevel.Debug);
-            }
-            else
-            {
-                // Use default directory if WorldSaveManager isn't available
-                worldCacheFolder = Path.Combine(cacheDirectory, "Default");
-                LogMessage($"Using default cache folder: {worldCacheFolder}", LogLevel.Warning);
-                if (!Directory.Exists(worldCacheFolder))
-                {
-                    Directory.CreateDirectory(worldCacheFolder);
-                }
-                return worldCacheFolder;
+                LogMessage($"Using default cache folder: {folderPath}", LogLevel.Warning);
             }
         }
+        else
+        {
+            string worldFolder = Path.Combine(Application.persistentDataPath, "Worlds", targetWorldKey);
+            folderPath = Path.Combine(worldFolder, "TerrainCache");
+        }
         
-        // Now construct the path using the current world ID
-        string worldFolder = Path.Combine(Application.persistentDataPath, "Worlds", currentWorldId);
-        string cacheFolder = Path.Combine(worldFolder, "TerrainCache");
-        
-        try {
-            // Create directory if it doesn't exist
-            if (!Directory.Exists(cacheFolder))
+        try
+        {
+            if (!Directory.Exists(folderPath))
             {
-                Directory.CreateDirectory(cacheFolder);
-                LogMessage($"Created terrain cache folder: {cacheFolder}", LogLevel.Info);
+                Directory.CreateDirectory(folderPath);
+                LogMessage($"Created terrain cache folder: {folderPath}", LogLevel.Info);
             }
             
-            // Cache the folder path for future use
-            worldCacheFolder = cacheFolder;
-            return cacheFolder;
+            worldCacheFolder = folderPath;
+            cachedFolderWorldId = targetWorldKey;
+            return worldCacheFolder;
         }
         catch (Exception e)
         {
@@ -233,7 +240,7 @@ public static class TerrainAnalysisCache
         }
     }
     
-    private static string GetCacheFilePath()
+    public static string GetCacheFilePath()
     {
         string cacheFolder = GetCacheFolder();
         if (string.IsNullOrEmpty(cacheFolder))
@@ -352,6 +359,8 @@ public static class TerrainAnalysisCache
             analysisCache.Clear();
             pendingSaveCoords.Clear();
             saveBatchQueue.Clear();
+            pendingDeleteCoords.Clear();
+            deleteBatchQueue.Clear();
             recentlyAnalyzed.Clear();
         }
         
@@ -363,6 +372,12 @@ public static class TerrainAnalysisCache
         {
             worldId = WorldSaveManager.Instance.CurrentWorldId;
             worldCacheFolder = null; // Reset folder path cache
+            cachedFolderWorldId = null;
+        }
+        else
+        {
+            worldCacheFolder = null;
+            cachedFolderWorldId = null;
         }
         
         LogMessage("TerrainAnalysisCache reset for new world", LogLevel.Info);
@@ -422,6 +437,7 @@ public static class TerrainAnalysisCache
         }
 
         List<TerrainAnalysisData> batchData = null;
+        List<Vector3Int> deleteBatch = null;
         int processedCount = 0;
 
         lock (cacheLock)
@@ -443,13 +459,34 @@ public static class TerrainAnalysisCache
                 }
             }
 
+            if (deleteBatchQueue.Count == 0 && pendingDeleteCoords.Count > 0)
+            {
+                int targetDeleteSize = batchOverride > 0
+                    ? batchOverride
+                    : (allowAsync ? BATCH_SIZE : Mathf.Max(BATCH_SIZE, pendingDeleteCoords.Count));
+
+                var coordsToDelete = pendingDeleteCoords.Take(targetDeleteSize).ToList();
+                foreach (var coord in coordsToDelete)
+                {
+                    deleteBatchQueue.Enqueue(coord);
+                    pendingDeleteCoords.Remove(coord);
+                }
+            }
+
             if (saveBatchQueue.Count > 0)
             {
                 batchData = new List<TerrainAnalysisData>(saveBatchQueue);
                 processedCount = batchData.Count;
                 saveBatchQueue.Clear();
             }
-            else if (pendingSaveCoords.Count == 0 && !allowAsync)
+            if (deleteBatchQueue.Count > 0)
+            {
+                deleteBatch = new List<Vector3Int>(deleteBatchQueue);
+                processedCount += deleteBatch.Count;
+                deleteBatchQueue.Clear();
+            }
+
+            if (deleteBatchQueue.Count == 0 && pendingSaveCoords.Count == 0 && pendingDeleteCoords.Count == 0 && !allowAsync)
             {
                 if (isDirty)
                 {
@@ -459,24 +496,32 @@ public static class TerrainAnalysisCache
             }
         }
 
-        if (batchData != null && batchData.Count > 0)
+        bool hasWork = (batchData != null && batchData.Count > 0) ||
+                       (deleteBatch != null && deleteBatch.Count > 0);
+
+        if (hasWork)
         {
             if (allowAsync)
             {
-                currentSaveTask = MergeBatchAsync(new List<TerrainAnalysisData>(batchData));
+                currentSaveTask = MergeBatchAsync(
+                    batchData != null ? new List<TerrainAnalysisData>(batchData) : null,
+                    deleteBatch != null ? new List<Vector3Int>(deleteBatch) : null);
                 return 0;
             }
 
-            MergeBatchData(batchData);
+            MergeBatchData(batchData, deleteBatch);
             return processedCount;
         }
 
         return 0;
     }
 
-    private static async Task MergeBatchAsync(List<TerrainAnalysisData> batchData)
+    private static async Task MergeBatchAsync(List<TerrainAnalysisData> batchData, List<Vector3Int> deleteCoords)
     {
-        if (batchData == null || batchData.Count == 0 || isApplicationQuitting) 
+        if ((batchData == null || batchData.Count == 0) && (deleteCoords == null || deleteCoords.Count == 0))
+            return;
+
+        if (isApplicationQuitting)
             return;
 
         // IMPORTANT: Resolve the cache path on the main thread before jumping to a background task.
@@ -489,8 +534,10 @@ public static class TerrainAnalysisCache
 
         try
         {
-            await Task.Run(() => MergeBatchData(batchData, cacheFilePath));
-            LogMessage($"Successfully saved {batchData.Count} terrain analyses", LogLevel.Info);
+            await Task.Run(() => MergeBatchData(batchData, deleteCoords, cacheFilePath));
+            int saveCount = batchData?.Count ?? 0;
+            int deleteCount = deleteCoords?.Count ?? 0;
+            LogMessage($"Persisted terrain cache batch (saved {saveCount}, deleted {deleteCount})", LogLevel.Info);
         }
         catch (Exception e)
         {
@@ -498,9 +545,12 @@ public static class TerrainAnalysisCache
         }
     }
 
-    private static void MergeBatchData(List<TerrainAnalysisData> batchData, string cacheFilePath = null)
+    private static void MergeBatchData(List<TerrainAnalysisData> batchData, List<Vector3Int> deleteCoords, string cacheFilePath = null)
     {
-        if (batchData == null || batchData.Count == 0 || isApplicationQuitting)
+        if ((batchData == null || batchData.Count == 0) && (deleteCoords == null || deleteCoords.Count == 0))
+            return;
+
+        if (isApplicationQuitting)
             return;
 
         try
@@ -528,7 +578,15 @@ public static class TerrainAnalysisCache
             Dictionary<SerializableVector3Int, TerrainAnalysisData> existingDict =
                 existingData.ToDictionary(d => d.Coordinate, d => d);
 
-            foreach (var newData in batchData)
+            if (deleteCoords != null && deleteCoords.Count > 0)
+            {
+                foreach (var coord in deleteCoords)
+                {
+                    existingDict.Remove(new SerializableVector3Int(coord));
+                }
+            }
+
+            foreach (var newData in batchData ?? Enumerable.Empty<TerrainAnalysisData>())
             {
                 if (existingDict.TryGetValue(newData.Coordinate, out var existingEntry))
                 {
@@ -601,7 +659,8 @@ public static class TerrainAnalysisCache
             if (analysisCache.Remove(chunkCoord))
             {
                 isDirty = true;
-                pendingSaveCoords.Add(chunkCoord);
+                pendingDeleteCoords.Add(chunkCoord);
+                pendingSaveCoords.Remove(chunkCoord);
                 LogMessage($"Invalidated analysis for chunk {chunkCoord}", LogLevel.Debug);
             }
         }
@@ -652,6 +711,7 @@ public static class TerrainAnalysisCache
         foreach (var key in oldestEntries)
         {
             analysisCache.Remove(key);
+            pendingDeleteCoords.Add(key);
         }
         
         if (shouldLog)
@@ -724,6 +784,7 @@ public static class TerrainAnalysisCache
                     {
                         existingData.LastAnalyzedTicks = DateTime.UtcNow.Ticks;
                         recentlyAnalyzed.Add(coord);
+                        pendingDeleteCoords.Remove(coord);
                         return;
                     }
                 }
@@ -731,6 +792,7 @@ public static class TerrainAnalysisCache
                 analysisCache[coord] = data;
                 recentlyAnalyzed.Add(coord);
                 isDirty = true;
+                pendingDeleteCoords.Remove(coord);
 
                 // Always schedule this coordinate for persistence so cached data survives restarts
                 pendingSaveCoords.Add(coord);
@@ -802,7 +864,7 @@ public static class TerrainAnalysisCache
             foreach (var key in keysToRemove)
             {
                 analysisCache.Remove(key);
-                pendingSaveCoords.Add(key);
+                pendingDeleteCoords.Add(key);
             }
         }
 
@@ -824,9 +886,13 @@ public static class TerrainAnalysisCache
         {
             // Get data to save - we'll do this synchronously since the app is shutting down
             List<TerrainAnalysisData> allData;
+            List<Vector3Int> deletesSnapshot;
             lock (cacheLock)
             {
                 allData = new List<TerrainAnalysisData>(analysisCache.Values);
+                deletesSnapshot = new List<Vector3Int>(pendingDeleteCoords);
+                pendingDeleteCoords.Clear();
+                deleteBatchQueue.Clear();
             }
 
             // Get cache file path
@@ -868,6 +934,25 @@ public static class TerrainAnalysisCache
                     // Add new data
                     dataMap[newData.Coordinate] = newData;
                 }
+            }
+
+            var liveKeys = new HashSet<SerializableVector3Int>(allData.Select(d => d.Coordinate));
+            var deleteKeys = new List<SerializableVector3Int>();
+            foreach (var deleteCoord in deletesSnapshot)
+            {
+                var key = new SerializableVector3Int(deleteCoord);
+                deleteKeys.Add(key);
+                liveKeys.Remove(key);
+            }
+            foreach (var key in deleteKeys)
+            {
+                dataMap.Remove(key);
+            }
+
+            var staleKeys = dataMap.Keys.Where(key => !liveKeys.Contains(key)).ToList();
+            foreach (var key in staleKeys)
+            {
+                dataMap.Remove(key);
             }
                 
             // Convert back to list

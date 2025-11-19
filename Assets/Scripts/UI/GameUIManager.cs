@@ -848,9 +848,6 @@ public class GameUIManager : MonoBehaviour
             seed = parsedSeed;
         }
         
-        // Store for world generation
-        PlayerPrefs.SetInt("WorldSeed", seed);
-        
         // Create the world
         if (WorldSaveManager.Instance == null)
         {
@@ -861,7 +858,7 @@ public class GameUIManager : MonoBehaviour
         try
         {
             // Initialize the world
-            WorldSaveManager.Instance.InitializeWorld(worldName, isMultiplayer);
+            WorldSaveManager.Instance.InitializeWorld(worldName, isMultiplayer, seed);
             string worldId = WorldSaveManager.Instance.CurrentWorldId;
             
             // Store selection

@@ -34,12 +34,14 @@ public class World : MonoBehaviour
         public Vector3Int pointPosition;
         public float newDensity;
         public Vector3 worldPosition; // Store world position for proper radius-based updates
+        public bool forceBoundaryFalloff;
 
-        public PendingDensityPointUpdate(Vector3Int pointPosition, float newDensity, Vector3 worldPosition)
+        public PendingDensityPointUpdate(Vector3Int pointPosition, float newDensity, Vector3 worldPosition, bool forceBoundaryFalloff = false)
         {
             this.pointPosition = pointPosition;
             this.newDensity = newDensity;
             this.worldPosition = worldPosition;
+            this.forceBoundaryFalloff = forceBoundaryFalloff;
         }
     }
 
@@ -59,6 +61,7 @@ public class World : MonoBehaviour
     private Dictionary<Vector3Int, Chunk> activeChunks = new Dictionary<Vector3Int, Chunk>();
     private float lastUpdateTime = 0f;
     private bool justStarted = true;
+    private bool ChunkModificationDiagnosticsEnabled => Config != null && Config.enableChunkModificationDiagnostics;
     #endregion
 
     #region Configuration Properties
@@ -166,6 +169,11 @@ public class World : MonoBehaviour
         return tracedChunks != null && tracedChunks.Contains(chunkCoord);
     }
     
+    private bool ShouldLogChunkDiagnostics(Vector3Int chunkCoord)
+    {
+        return ChunkModificationDiagnosticsEnabled || IsChunkTraced(chunkCoord);
+    }
+    
     /// <summary>
     /// Enable tracing for all chunks affected by a mining operation at a specific world position.
     /// This helps identify problematic chunks when mining.
@@ -226,6 +234,7 @@ public class World : MonoBehaviour
         bool hasPendingVoxelUpdates = pendingVoxelUpdates != null && pendingVoxelUpdates.ContainsKey(chunkCoord);
         bool hasPendingDensityUpdates = pendingDensityPointUpdates != null && pendingDensityPointUpdates.ContainsKey(chunkCoord);
         bool isMarkedForMod = modifiedSolidChunks != null && modifiedSolidChunks.Contains(chunkCoord);
+        bool isForcedForLoad = IsChunkForcedForLoad(chunkCoord);
         bool hasQueuedMining = miningOperationQueues != null && miningOperationQueues.ContainsKey(chunkCoord);
         bool isCurrentlyProcessing = currentlyProcessingChunks != null && currentlyProcessingChunks.Contains(chunkCoord);
         
@@ -262,6 +271,7 @@ public class World : MonoBehaviour
             $"  Chunk Object: {(chunk != null ? "Exists" : "NULL")}\n" +
             $"  ChunkData: {(chunkData != null ? "Exists" : "NULL")}\n" +
             $"  IsMarkedForModification: {isMarkedForMod}\n" +
+            $"  ForcedForLoad: {isForcedForLoad}\n" +
             $"  === CHUNK DATA DETAILS ===\n" +
             $"  {(chunkData != null ? $"IsEmptyChunk: {chunkData.IsEmptyChunk}, IsSolidChunk: {chunkData.IsSolidChunk}, HasModifiedData: {chunkData.HasModifiedData}" : "N/A (chunk not loaded)")}\n" +
             $"  === OPERATIONS QUEUE ===\n" +
@@ -335,6 +345,7 @@ public class World : MonoBehaviour
         bool hasPendingUpdates = HasPendingUpdates(chunkCoord);
         bool isQuarantined = ChunkStateManager.Instance?.QuarantinedChunks.Contains(chunkCoord) ?? false;
         bool isMarkedForMod = modifiedSolidChunks.Contains(chunkCoord);
+        bool isForcedForLoad = IsChunkForcedForLoad(chunkCoord);
         
         Debug.Log($"[CHUNK_DIAGNOSIS] Chunk {chunkCoord}:");
         Debug.Log($"  - Loaded: {isLoaded}");
@@ -342,6 +353,7 @@ public class World : MonoBehaviour
         Debug.Log($"  - Quarantined: {isQuarantined}");
         Debug.Log($"  - HasPendingUpdates: {hasPendingUpdates}");
         Debug.Log($"  - IsMarkedForMod: {isMarkedForMod}");
+        Debug.Log($"  - ForcedForLoad: {isForcedForLoad}");
         
         if (hasPendingUpdates)
         {
@@ -492,11 +504,12 @@ public class World : MonoBehaviour
             foreach (var missing in providedButNotLoaded)
             {
                 var state = ChunkStateManager.Instance?.GetChunkState(missing);
-                bool hasPendingUpdates = HasPendingUpdates(missing);
+                    bool hasPendingUpdates = HasPendingUpdates(missing);
+                    bool isForcedForLoad = IsChunkForcedForLoad(missing);
                 bool isQuarantined = ChunkStateManager.Instance?.QuarantinedChunks.Contains(missing) ?? false;
                 
                 Debug.LogError($"[MISSING_CHUNK_ANALYSIS] MISSING CHUNK FROM YOUR LIST: {missing} - " +
-                    $"State: {state?.Status}, HasPendingUpdates: {hasPendingUpdates}, Quarantined: {isQuarantined}");
+                        $"State: {state?.Status}, HasPendingUpdates: {hasPendingUpdates}, ForcedForLoad: {isForcedForLoad}, Quarantined: {isQuarantined}");
                 
                 // Enable tracing for missing chunks
                 EnableTracingForChunkAndNeighbors(missing);
@@ -510,11 +523,12 @@ public class World : MonoBehaviour
         foreach (var missing in missingChunks)
         {
             var state = ChunkStateManager.Instance?.GetChunkState(missing);
-            bool hasPendingUpdates = HasPendingUpdates(missing);
+                bool hasPendingUpdates = HasPendingUpdates(missing);
+                bool isForcedForLoad = IsChunkForcedForLoad(missing);
             bool isQuarantined = ChunkStateManager.Instance?.QuarantinedChunks.Contains(missing) ?? false;
             
             Debug.LogWarning($"[MISSING_CHUNK_ANALYSIS] MISSING CHUNK: {missing} - " +
-                $"State: {state?.Status}, HasPendingUpdates: {hasPendingUpdates}, Quarantined: {isQuarantined}");
+                    $"State: {state?.Status}, HasPendingUpdates: {hasPendingUpdates}, ForcedForLoad: {isForcedForLoad}, Quarantined: {isQuarantined}");
             
             // Enable tracing for missing chunks
             EnableTracingForChunkAndNeighbors(missing);
@@ -538,10 +552,11 @@ public class World : MonoBehaviour
         {
             bool isLoaded = chunks.ContainsKey(chunkCoord);
             var state = ChunkStateManager.Instance?.GetChunkState(chunkCoord);
-            bool hasPendingUpdates = HasPendingUpdates(chunkCoord);
+                bool hasPendingUpdates = HasPendingUpdates(chunkCoord);
+                bool isForcedForLoad = IsChunkForcedForLoad(chunkCoord);
             
             Debug.Log($"[MISSING_CHUNK_ANALYSIS] Chunk {chunkCoord} - " +
-                $"Loaded: {isLoaded}, State: {state?.Status}, HasPendingUpdates: {hasPendingUpdates}");
+                    $"Loaded: {isLoaded}, State: {state?.Status}, HasPendingUpdates: {hasPendingUpdates}, ForcedForLoad: {isForcedForLoad}");
         }
     }
     
@@ -647,6 +662,7 @@ public class World : MonoBehaviour
     private const float ImmediateLoadDistanceThreshold = 5f;
 
     private HashSet<Vector3Int> modifiedSolidChunks = new HashSet<Vector3Int>();
+    private HashSet<Vector3Int> forcedBoundaryChunks = new HashSet<Vector3Int>();
     private float lastNearbyAccessRefreshTime = -10f;
     private readonly List<Vector3Int> accessTouchCenters = new List<Vector3Int>();
     private Dictionary<ulong, Vector3> activePlayerPositions = new Dictionary<ulong, Vector3>();
@@ -948,6 +964,41 @@ public class World : MonoBehaviour
         Debug.LogError("Failed to find player after all retries! World initialization failed.");
     }
 
+    private void ApplyWorldSeedFromMetadata()
+    {
+        if (config == null)
+        {
+            Debug.LogWarning("[World] Cannot apply world seed - TerrainConfigs reference missing");
+            return;
+        }
+
+        if (WorldSaveManager.Instance == null)
+        {
+            Debug.LogWarning("[World] Cannot apply world seed - WorldSaveManager not available");
+            return;
+        }
+
+        var metadata = WorldSaveManager.Instance.CurrentWorldMetadata ?? WorldSaveManager.Instance.GetCurrentWorldMetadata();
+        if (metadata == null)
+        {
+            Debug.LogWarning("[World] No world metadata available - using existing terrain seed");
+            return;
+        }
+
+        int worldSeed = metadata.WorldSeed;
+        if (worldSeed == 0)
+        {
+            Debug.LogWarning("[World] World metadata seed not set - falling back to existing terrain seed");
+            return;
+        }
+
+        if (config.noiseSeed != worldSeed)
+        {
+            Debug.Log($"[World] Applying world seed {worldSeed} (previous {config.noiseSeed})");
+            config.noiseSeed = worldSeed;
+        }
+    }
+
     // REPLACE InitializeWorld() METHOD
     private void InitializeWorld()
     {
@@ -985,6 +1036,7 @@ public class World : MonoBehaviour
         // Cache the operations queue reference
         operationsQueue = ChunkOperationsQueue.Instance;
 
+        ApplyWorldSeedFromMetadata();
         ResetInitialLoadTracking();
 
         // Initialize with default coordinates if needed
@@ -1026,6 +1078,12 @@ public class World : MonoBehaviour
         chunk.gameObject.SetActive(true);
 
         chunks[coord] = chunk;
+        
+        // DIAGNOSTIC: Log for problematic coordinates
+        if (IsProblematicCoordinate(coord))
+        {
+            Debug.Log($"[COORD_5_DEBUG] RegisterChunk - chunk {coord} registered at position {chunk.transform.position}");
+        }
     }
 
     public bool IsSolidChunkMarkedForModification(Vector3Int chunkCoord)
@@ -1052,7 +1110,12 @@ public class World : MonoBehaviour
             LogChunkTrace(coordinate, $"RemoveChunk: Removing chunk - no pending updates, state: {state?.Status}");
         }
         
-        return chunks.Remove(coordinate);
+        bool removed = chunks.Remove(coordinate);
+        if (removed)
+        {
+            ClearForcedChunkFlag(coordinate, "Chunk removed from world");
+        }
+        return removed;
     }
 
     public bool IsChunkLoaded(Vector3Int chunkCoordinates)
@@ -1062,17 +1125,28 @@ public class World : MonoBehaviour
 
     public void ResetTerrainAnalysisCache()
     {
-        // Reset any in-memory cache state when loading a new world
+        // Clear cache state when switching worlds/seeds
+        TerrainAnalysisCache.ResetCache();
         TerrainAnalysisCache.Update();
-        
-        // This forces the TerrainAnalysisCache to load data specific to the current world
+
+        Vector3Int sampleOrigin = lastPlayerChunkCoordinates;
+        Vector3 referencePosition = playerPosition;
+        if (referencePosition == Vector3.zero && playerController != null)
+        {
+            referencePosition = playerController.transform.position;
+        }
+        if (referencePosition != Vector3.zero)
+        {
+            sampleOrigin = Coord.WorldToChunkCoord(referencePosition, chunkSize, voxelSize);
+        }
+
         for (int x = -1; x <= 1; x++)
         for (int z = -1; z <= 1; z++)
         {
-            Vector3Int sampleCoord = lastPlayerChunkCoordinates + new Vector3Int(x, 0, z);
+            Vector3Int sampleCoord = sampleOrigin + new Vector3Int(x, 0, z);
             TerrainAnalysisCache.TryGetAnalysis(sampleCoord, out _);
         }
-        
+
         Debug.Log("Reset TerrainAnalysisCache for newly loaded world");
     }
 
@@ -1245,7 +1319,8 @@ public class World : MonoBehaviour
         int baseUnloadPerUpdate = Mathf.Max(0, Mathf.RoundToInt(dynamicChunksPerFrame * 0.75f));
         int unloadChunksPerUpdate = baseUnloadPerUpdate + additionalUnloads;
         
-        if (IsInitialLoadInProgress)
+        bool pauseServerUnloadsDuringCacheStage = IsInitialLoadInProgress && initialLoadStage == InitialLoadStage.ProcessingTerrainCache;
+        if (pauseServerUnloadsDuringCacheStage)
         {
             unloadChunksPerUpdate = 0;
         }
@@ -2089,6 +2164,7 @@ public class World : MonoBehaviour
             Vector3 worldPos = Coord.GetWorldPosition(chunkCoord, voxelPos, chunkSize, voxelSize);
             float radius = voxelSize * (Config.densityInfluenceRadius + 1f); // Extra radius for boundary cases
             var affectedChunks = GetAffectedChunks(worldPos, radius);
+            Dictionary<Vector3Int, bool> chunkForceFalloffFlags = new Dictionary<Vector3Int, bool>();
             
             // Auto-enable tracing if enabled in inspector
             if (autoTraceMiningOperations)
@@ -2105,7 +2181,20 @@ public class World : MonoBehaviour
             foreach (var neighborCoord in affectedChunks)
             {
                 LogChunkTrace(neighborCoord, $"Mining operation affecting this chunk at worldPos {worldPos}");
-                
+
+                bool cachedAnalysisAvailable = TerrainAnalysisCache.TryGetAnalysis(neighborCoord, out var cachedAnalysis);
+                bool chunkWasSolid = cachedAnalysisAvailable && cachedAnalysis.IsSolid;
+
+                float distanceToChunk = DistanceToChunkBounds(worldPos, neighborCoord);
+                bool withinRadius = distanceToChunk <= radius + voxelSize;
+                bool forceBoundaryFalloff = chunkWasSolid && !withinRadius;
+                chunkForceFalloffFlags[neighborCoord] = forceBoundaryFalloff;
+
+                if (forceBoundaryFalloff && ShouldLogChunkDiagnostics(neighborCoord))
+                {
+                    Debug.Log($"[MOD_DIAG:{neighborCoord}] HandleVoxelDestruction forcing boundary falloff (distance={distanceToChunk:F2}, radius={radius:F2})");
+                }
+
                 // Always invalidate the analysis - this ensures we don't skip loading modified chunks
                 TerrainAnalysisCache.InvalidateAnalysis(neighborCoord);
                 Debug.Log($"[HandleVoxelDestruction] Invalidated terrain cache for chunk {neighborCoord}");
@@ -2128,17 +2217,82 @@ public class World : MonoBehaviour
                     
                     var neighborState = ChunkStateManager.Instance.GetChunkState(neighborOfNeighbor);
                     
-                    // Check if this neighbor is a solid chunk that should be marked for modification
+                    // CRITICAL FIX: Check if this neighbor needs to be marked for modification
                     // This is especially important for vertically adjacent chunks (dy != 0)
-                    if (TerrainAnalysisCache.TryGetAnalysis(neighborOfNeighbor, out var neighborAnalysis) && neighborAnalysis.IsSolid)
+                    // We need to handle multiple scenarios:
+                    // 1. Solid chunks (from cache) - definitely need modification
+                    // 2. Chunks without cache data - might need modification if adjacent to modified chunk
+                    // 3. Chunks currently loading - need cache invalidation to prevent stale data
+                    bool isSolidChunk = false;
+                    bool hasCacheData = TerrainAnalysisCache.TryGetAnalysis(neighborOfNeighbor, out var neighborAnalysis);
+                    if (hasCacheData)
                     {
-                        Debug.Log($"[HandleVoxelDestruction] Marking neighbor-of-affected chunk {neighborOfNeighbor} for modification (solid chunk adjacent to modified chunk)");
+                        isSolidChunk = neighborAnalysis.IsSolid;
+                    }
+                    
+                    // CRITICAL FIX: Check distance BEFORE marking for modification
+                    // The old logic would mark ALL solid neighbors, causing chunks like (-5, -1, -1)
+                    // to get marked even when mining was 23+ units away. Once marked, they stayed
+                    // in the "modified solid chunks" set forever and got bad worldPos values.
+                    float distanceToNeighborForMarking = DistanceToChunkBounds(worldPos, neighborOfNeighbor);
+                    float maxMarkingDistance = radius * 3f; // More generous than the density update check
+                    
+                    // Mark for modification if:
+                    // - It's a solid chunk (from cache) AND within reasonable distance
+                    // - It's vertically adjacent and we don't have cache data AND within distance
+                    // - It's directly adjacent to an affected chunk AND within distance
+                    bool shouldMarkForModification = false;
+                    if (isSolidChunk && distanceToNeighborForMarking <= maxMarkingDistance)
+                    {
+                        shouldMarkForModification = true;
+                        Debug.Log($"[HandleVoxelDestruction] Marking neighbor {neighborOfNeighbor} (solid, dist: {distanceToNeighborForMarking:F2})");
+                    }
+                    else if (!hasCacheData && (dy != 0 || Mathf.Abs(dx) + Mathf.Abs(dz) <= 1) && distanceToNeighborForMarking <= maxMarkingDistance)
+                    {
+                        shouldMarkForModification = true;
+                        Debug.Log($"[HandleVoxelDestruction] Marking neighbor {neighborOfNeighbor} (no cache, dist: {distanceToNeighborForMarking:F2})");
+                    }
+                    else if (isSolidChunk || !hasCacheData)
+                    {
+                        // This is the FIX - don't mark if too far!
+                        Debug.Log($"[HandleVoxelDestruction] SKIPPING mark for {neighborOfNeighbor} - too far (dist: {distanceToNeighborForMarking:F2} > max: {maxMarkingDistance:F2})");
+                    }
+                    
+                    if (shouldMarkForModification)
+                    {
+                        MarkChunkForForcedLoad(neighborOfNeighbor, $"Boundary neighbor of {neighborCoord}");
                         LogChunkTrace(neighborOfNeighbor, $"Marked for modification - neighbor of affected chunk {neighborCoord}");
-                        MarkSolidChunkForModification(neighborOfNeighbor);
+                        if (isSolidChunk)
+                        {
+                            MarkSolidChunkForModification(neighborOfNeighbor);
+                        }
                         
-                        // Also invalidate its cache and queue a density update
+                        // Also invalidate its cache
                         TerrainAnalysisCache.InvalidateAnalysis(neighborOfNeighbor);
-                        QueueDensityUpdate(neighborOfNeighbor, worldPos);
+                        
+                        // CRITICAL FIX: Only queue density update if the mining position is actually close enough
+                        // to potentially affect this neighbor chunk. Otherwise we get updates with positions way
+                        // outside the chunk bounds (e.g., local pos (37, 25, 0) when valid range is 0-16)
+                        float distanceToNeighbor = DistanceToChunkBounds(worldPos, neighborOfNeighbor);
+                        float maxEffectiveDistance = radius * 2f; // Allow some extra margin for boundary effects
+                        
+                        // DIAGNOSTIC: Always log this check for traced chunks
+                        if (ShouldLogChunkDiagnostics(neighborOfNeighbor))
+                        {
+                            Debug.Log($"[MOD_DIAG:{neighborOfNeighbor}] Distance check in HandleVoxelDestruction - " +
+                                $"worldPos: {worldPos}, distanceToNeighbor: {distanceToNeighbor:F2}, maxEffectiveDistance: {maxEffectiveDistance:F2}, " +
+                                $"Within range: {distanceToNeighbor <= maxEffectiveDistance}");
+                        }
+                        
+                        if (distanceToNeighbor <= maxEffectiveDistance)
+                        {
+                            QueueDensityUpdate(neighborOfNeighbor, worldPos);
+                        }
+                        else
+                        {
+                            Debug.Log($"[HandleVoxelDestruction] Skipping density update for neighbor {neighborOfNeighbor} - " +
+                                $"mining position {worldPos} is too far (distance: {distanceToNeighbor:F2}, max: {maxEffectiveDistance:F2})");
+                        }
                         
                         // Request immediate load if not already loaded
                         if (!chunks.ContainsKey(neighborOfNeighbor))
@@ -2221,7 +2375,8 @@ public class World : MonoBehaviour
                     neighborChunk.CompleteAllJobs();
                     neighborChunk.EnsureDataInitialized();
                     
-                    bool densityChanged = ApplyDensityUpdate(neighborChunk, worldPos, false);
+                    bool forceFalloff = chunkForceFalloffFlags.TryGetValue(neighborCoord, out var flag) && flag;
+                    bool densityChanged = ApplyDensityUpdate(neighborChunk, worldPos, false, forceFalloff);
                     
                     if (densityChanged)
                     {
@@ -2240,6 +2395,7 @@ public class World : MonoBehaviour
                         
                         // CRITICAL FIX: Always invalidate the analysis after confirmed density changes
                         TerrainAnalysisCache.InvalidateAnalysis(neighborCoord);
+                        ClearForcedChunkFlag(neighborCoord, "Density applied via HandleVoxelDestruction");
                     }
                 }
                 else
@@ -2303,17 +2459,97 @@ public class World : MonoBehaviour
             return true;
         }
         
-        // Skip if quarantined
-        if (ChunkStateManager.Instance.QuarantinedChunks.Contains(chunkCoord))
+        // CRITICAL FIX: Allow loading quarantined chunks if they have pending updates
+        // This matches RequestImmediateChunkLoad behavior and enables recovery
+        bool isQuarantined = ChunkStateManager.Instance.QuarantinedChunks.Contains(chunkCoord);
+        bool hasPendingUpdates = HasPendingUpdates(chunkCoord);
+        
+        if (isQuarantined && !hasPendingUpdates)
         {
-            Debug.LogWarning($"Can't load quarantined chunk {chunkCoord}");
+            Debug.LogWarning($"Can't load quarantined chunk {chunkCoord} - no pending updates");
             return false;
+        }
+        
+        if (isQuarantined && hasPendingUpdates)
+        {
+            Debug.LogWarning($"Allowing load request for QUARANTINED chunk {chunkCoord} because it has pending updates");
         }
 
         try
         {
             // Get current state first
             var currentState = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+            
+            // CRITICAL FIX: Handle stuck Loading/Error states by attempting recovery
+            if (currentState.Status == ChunkConfigurations.ChunkStatus.Loading)
+            {
+                Debug.LogWarning($"Chunk {chunkCoord} stuck in Loading state - attempting recovery");
+                if (AttemptChunkRecovery(chunkCoord))
+                {
+                    // Recovery succeeded, state should now be None - continue with load
+                    currentState = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+                }
+                else
+                {
+                    Debug.LogError($"Failed to recover chunk {chunkCoord} from Loading state");
+                    return false;
+                }
+            }
+            else if (currentState.Status == ChunkConfigurations.ChunkStatus.Error)
+            {
+                Debug.LogWarning($"Chunk {chunkCoord} in Error state - attempting recovery");
+                if (AttemptChunkRecovery(chunkCoord))
+                {
+                    // Recovery succeeded, state should now be None - continue with load
+                    currentState = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+                }
+                else
+                {
+                    Debug.LogError($"Failed to recover chunk {chunkCoord} from Error state");
+                    return false;
+                }
+            }
+            
+            // CRITICAL FIX: Handle chunks in Unloading state
+            // If chunk is unloading, we need to wait for it to finish or cancel the unload
+            if (currentState.Status == ChunkConfigurations.ChunkStatus.Unloading)
+            {
+                Debug.LogWarning($"Chunk {chunkCoord} is currently UNLOADING - " +
+                    $"HasPendingUpdates: {hasPendingUpdates}, IsMarkedForMod: {modifiedSolidChunks.Contains(chunkCoord)}");
+                LogChunkTrace(chunkCoord, $"LoadChunkImmediately: Chunk is UNLOADING");
+                
+                // If chunk has pending updates or is marked for modification, cancel the unload
+                // by forcing state to Unloaded so it can be reloaded
+                if (hasPendingUpdates || modifiedSolidChunks.Contains(chunkCoord))
+                {
+                    Debug.LogWarning($"Cancelling unload for chunk {chunkCoord} due to pending updates/modifications");
+                    LogChunkTrace(chunkCoord, $"LoadChunkImmediately: Cancelling unload due to pending updates");
+                    
+                    // Try to transition Unloading -> Unloaded -> None so we can reload
+                    if (ChunkStateManager.Instance.TryChangeState(
+                        chunkCoord,
+                        ChunkConfigurations.ChunkStatus.Unloaded,
+                        ChunkConfigurations.ChunkStateFlags.None))
+                    {
+                        currentState = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+                        Debug.Log($"Successfully cancelled unload for chunk {chunkCoord}, new state: {currentState.Status}");
+                        LogChunkTrace(chunkCoord, $"LoadChunkImmediately: Successfully cancelled unload");
+                    }
+                    else
+                    {
+                        Debug.LogError($"Failed to cancel unload for chunk {chunkCoord}");
+                        LogChunkTrace(chunkCoord, $"LoadChunkImmediately: FAILED to cancel unload");
+                        return false;
+                    }
+                }
+                else
+                {
+                    // No pending updates, let unload complete
+                    Debug.Log($"Chunk {chunkCoord} is unloading with no pending updates - cannot load immediately");
+                    LogChunkTrace(chunkCoord, $"LoadChunkImmediately: Waiting for unload to complete");
+                    return false;
+                }
+            }
             
             // CRITICAL FIX: Don't try to force transition if it would be invalid
             // Instead, follow the proper state machine flow
@@ -2341,8 +2577,36 @@ public class World : MonoBehaviour
             Chunk chunkObject = ChunkPoolManager.Instance.GetChunk();
             if (chunkObject == null)
             {
-                Debug.LogError($"Failed to get chunk from pool for {chunkCoord}");
-                return false;
+                Debug.LogError($"Failed to get chunk from pool for {chunkCoord} - pool exhausted. " +
+                    $"Falling back to queued load instead of immediate load.");
+                LogChunkTrace(chunkCoord, $"LoadChunkImmediately: Pool exhausted, falling back to queued load");
+                
+                // CRITICAL FIX: If pool is exhausted, fall back to queued load instead of failing
+                // This ensures the chunk will still load when pool becomes available
+                if (ChunkStateManager.Instance.TryChangeState(
+                    chunkCoord,
+                    ChunkConfigurations.ChunkStatus.None,
+                    ChunkConfigurations.ChunkStateFlags.None))
+                {
+                    try
+                    {
+                        operationsQueue.QueueChunkForLoad(chunkCoord, immediate: true, quickCheck: false);
+                        Debug.Log($"Successfully queued chunk {chunkCoord} for load (pool exhausted, using queue)");
+                        LogChunkTrace(chunkCoord, $"LoadChunkImmediately: Queued for load (pool exhausted)");
+                        return true; // Return true because we successfully queued it
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogError($"Failed to queue chunk {chunkCoord} after pool exhaustion: {e.Message}");
+                        LogChunkTrace(chunkCoord, $"LoadChunkImmediately: ERROR - Failed to queue after pool exhaustion: {e.Message}");
+                        return false;
+                    }
+                }
+                else
+                {
+                    Debug.LogError($"Failed to reset state for chunk {chunkCoord} after pool exhaustion");
+                    return false;
+                }
             }
 
             // Position and initialize
@@ -2528,7 +2792,7 @@ public class World : MonoBehaviour
         }
     }
 
-    private bool ApplyDensityUpdate(Chunk chunk, Vector3 worldPos, bool isAdding)
+    private bool ApplyDensityUpdate(Chunk chunk, Vector3 worldPos, bool isAdding, bool forceBoundaryFalloff = false)
     {
         // Check if the chunk is a solid chunk that was just loaded
         Vector3Int chunkCoord = chunk.GetChunkData().ChunkCoordinate;
@@ -2545,6 +2809,30 @@ public class World : MonoBehaviour
         
         // The chunk origin in world space is needed for coordinate conversions
         Vector3 chunkOrigin = chunk.transform.position;
+        Vector3 expectedOrigin = GetChunkWorldPosition(chunkCoord);
+        
+        // DIAGNOSTIC: Check if chunk's actual position matches expected position
+        if (chunkOrigin != expectedOrigin)
+        {
+            Debug.LogError($"[ApplyDensityUpdate] POSITION MISMATCH for chunk {chunkCoord}! " +
+                $"GameObject position: {chunkOrigin}, Expected: {expectedOrigin}, Diff: {chunkOrigin - expectedOrigin}");
+        }
+        
+        // DIAGNOSTIC: Log detailed information for traced chunks OR problematic coordinates
+        if (ShouldLogChunkDiagnostics(chunkCoord) || IsProblematicCoordinate(chunkCoord))
+        {
+            var chunkData = chunk.GetChunkData();
+            string prefix = IsProblematicCoordinate(chunkCoord) ? "[COORD_5_DEBUG]" : $"[MOD_DIAG:{chunkCoord}]";
+            Debug.Log($"{prefix} ApplyDensityUpdate called - " +
+                $"worldPos: {worldPos}, " +
+                $"chunkOrigin: {chunkOrigin}, " +
+                $"isAdding: {isAdding}, " +
+                $"forceBoundaryFalloff: {forceBoundaryFalloff}, " +
+                $"HasSavedData: {chunkData.HasSavedData}, " +
+                $"IsSolid: {chunkData.IsSolidChunk}, " +
+                $"IsEmpty: {chunkData.IsEmptyChunk}, " +
+                $"DensityPointsCreated: {chunkData.DensityPoints.IsCreated}");
+        }
         
         // Calculate influencing radius based on voxel size
         // CRITICAL FIX: Use the same radius calculation as GetAffectedChunks to ensure consistency
@@ -2565,7 +2853,16 @@ public class World : MonoBehaviour
         
         // Convert world mining position to LOCAL density coordinates in this chunk
         Vector3Int localMiningPos = Coord.WorldToDensityCoord(worldPos, chunkOrigin, voxelSize);
-        Debug.Log($"[ApplyDensityUpdate] Mining world pos: {worldPos}, chunk origin: {chunkOrigin}, local density pos in chunk {chunkCoord}: {localMiningPos}, totalPointsPerAxis: {totalPointsPerAxis}");
+        
+        // DIAGNOSTIC: Always log for problematic coordinates
+        if (IsProblematicCoordinate(chunkCoord))
+        {
+            Debug.Log($"[COORD_5_DEBUG] ApplyDensityUpdate conversion - Mining world pos: {worldPos}, chunk origin: {chunkOrigin}, local density pos: {localMiningPos}, totalPointsPerAxis: {totalPointsPerAxis}");
+        }
+        else
+        {
+            Debug.Log($"[ApplyDensityUpdate] Mining world pos: {worldPos}, chunk origin: {chunkOrigin}, local density pos in chunk {chunkCoord}: {localMiningPos}, totalPointsPerAxis: {totalPointsPerAxis}");
+        }
         
         // Create bounds for our update region
         int minX, maxX, minY, maxY, minZ, maxZ;
@@ -2690,7 +2987,7 @@ public class World : MonoBehaviour
         Debug.Log($"[ApplyDensityUpdate] Chunk {chunkCoord} - Update region: X({minX}-{maxX}), Y({minY}-{maxY}), Z({minZ}-{maxZ}), " +
             $"Total points: {totalPointsInRegion}, Empty: {isEmptyRegion}, " +
             $"WorldPos: {worldPos}, LocalMiningPos: {localMiningPos}, Radius: {radius}, DensityRange: {densityRange}, " +
-            $"WasSolid: {wasSolid}, TotalPointsPerAxis: {totalPointsPerAxis}");
+            $"WasSolid: {wasSolid}, ForceBoundaryFalloff: {forceBoundaryFalloff}, TotalPointsPerAxis: {totalPointsPerAxis}");
         LogChunkTrace(chunkCoord, $"ApplyDensityUpdate: Update region X({minX}-{maxX}) Y({minY}-{maxY}) Z({minZ}-{maxZ}), Total points: {totalPointsInRegion}, Empty: {isEmptyRegion}");
         
         if (isEmptyRegion)
@@ -2737,6 +3034,10 @@ public class World : MonoBehaviour
             // Calculate distance from the mining point for falloff
             float distance = Vector3.Distance(worldPos, pointWorldPos);
             float falloff = CalculateDensityFalloff(distance, radius);
+            if (forceBoundaryFalloff && falloff < 1f)
+            {
+                falloff = 1f;
+            }
             
             // Only apply significant changes
             if (falloff > Config.minDensityChangeThreshold)
@@ -2832,6 +3133,20 @@ public class World : MonoBehaviour
             $"FailedSet: {pointsFailedSet}, " +
             $"AnyDensityChanged: {anyDensityChanged}");
         LogChunkTrace(chunkCoord, $"ApplyDensityUpdate: Processed={pointsProcessed}, PassedFalloff={pointsPassedFalloff}, PassedThreshold={pointsPassedThreshold}, SetSuccessfully={pointsSetSuccessfully}, AnyDensityChanged={anyDensityChanged}");
+        LogChunkModificationSummary(
+            chunkCoord,
+            worldPos,
+            chunkOrigin,
+            radius,
+            localMiningPos,
+            wasSolid,
+            anyDensityChanged,
+            pointsProcessed,
+            pointsPassedFalloff,
+            pointsPassedThreshold,
+            pointsSetSuccessfully,
+            pointsSkippedFalloff,
+            forceBoundaryFalloff);
         
         // Log sample points
         if (samplePoints.Count > 0)
@@ -2990,7 +3305,12 @@ public class World : MonoBehaviour
             
             // CRITICAL FIX: Use a more generous margin for solid chunks
             float chunkMargin = chunkSize * voxelSize * 1.2f; // Increased from 0.8 to 1.2 (120% of chunk size)
-            bool isSolidChunk = TerrainAnalysisCache.TryGetAnalysis(chunkCoord, out var analysis) && analysis.IsSolid;
+            
+            // CRITICAL FIX: Handle chunks without cache data more robustly
+            // If cache doesn't exist, we can't know if it's solid, so use conservative approach
+            bool hasCacheData = TerrainAnalysisCache.TryGetAnalysis(chunkCoord, out var analysis);
+            bool isSolidChunk = hasCacheData && analysis.IsSolid;
+            bool isMarkedForModification = IsSolidChunkMarkedForModification(chunkCoord);
             
             // Use increased margin for solid chunks
             if (isSolidChunk)
@@ -3001,17 +3321,35 @@ public class World : MonoBehaviour
             // Calculate distance from mining point to nearest chunk face instead of center
             float distanceToChunk = DistanceToChunkBounds(worldPos, chunkCoord);
             
-            // If we're within range of the chunk, add it
-            if (distanceToChunk <= radius + voxelSize)
+            // CRITICAL FIX: If chunk is marked for modification, it was explicitly included
+            // in a previous mining operation - always include it to ensure consistency
+            if (isMarkedForModification)
             {
                 affectedChunks.Add(chunkCoord);
-                Debug.Log($"[GetAffectedChunks] Added chunk {chunkCoord} - distance: {distanceToChunk:F2}, radius: {radius + voxelSize:F2}");
+                string prefix = IsProblematicCoordinate(chunkCoord) ? "[COORD_5_DEBUG]" : "";
+                Debug.Log($"{prefix}[GetAffectedChunks] Added chunk {chunkCoord} - marked for modification, distance: {distanceToChunk:F2}");
+                if (isSolidChunk)
+                {
+                    MarkSolidChunkForModification(chunkCoord);
+                }
+            }
+            // If we're within range of the chunk, add it
+            else if (distanceToChunk <= radius + voxelSize)
+            {
+                affectedChunks.Add(chunkCoord);
+                string prefix = IsProblematicCoordinate(chunkCoord) ? "[COORD_5_DEBUG]" : "";
+                Debug.Log($"{prefix}[GetAffectedChunks] Added chunk {chunkCoord} - distance: {distanceToChunk:F2}, radius: {radius + voxelSize:F2}");
                 
                 // If this chunk is solid, make sure we mark it for modification
                 if (isSolidChunk)
                 {
                     MarkSolidChunkForModification(chunkCoord);
                 }
+            }
+            // DIAGNOSTIC: Log when problematic coordinates are NOT added
+            else if (IsProblematicCoordinate(chunkCoord))
+            {
+                Debug.Log($"[COORD_5_DEBUG][GetAffectedChunks] SKIPPED chunk {chunkCoord} - distance: {distanceToChunk:F2}, radius: {radius + voxelSize:F2}, marked: {isMarkedForModification}, solid: {isSolidChunk}");
             }
             // Also include solid chunks that are just a bit further away
             else if (isSolidChunk && distanceToChunk <= radius * 1.5f)
@@ -3020,12 +3358,19 @@ public class World : MonoBehaviour
                 affectedChunks.Add(chunkCoord);
                 MarkSolidChunkForModification(chunkCoord);
             }
+            // CRITICAL FIX: For chunks without cache data that are close, use conservative approach
+            // Include them if they're within extended radius to ensure boundary updates
+            else if (!hasCacheData && distanceToChunk <= radius * 1.3f)
+            {
+                Debug.Log($"[GetAffectedChunks] Including chunk {chunkCoord} without cache data (conservative approach) - distance: {distanceToChunk:F2}");
+                affectedChunks.Add(chunkCoord);
+            }
             else
             {
                 // DEBUG: Log chunks that are being excluded
                 if (distanceToChunk <= radius * 2f) // Only log if reasonably close
                 {
-                    Debug.Log($"[GetAffectedChunks] Excluded chunk {chunkCoord} - distance: {distanceToChunk:F2}, radius: {radius + voxelSize:F2}, isSolid: {isSolidChunk}");
+                    Debug.Log($"[GetAffectedChunks] Excluded chunk {chunkCoord} - distance: {distanceToChunk:F2}, radius: {radius + voxelSize:F2}, isSolid: {isSolidChunk}, hasCache: {hasCacheData}");
                 }
             }
         }
@@ -3047,6 +3392,79 @@ public class World : MonoBehaviour
         
         // Return distance to closest point
         return Vector3.Distance(point, new Vector3(closestX, closestY, closestZ));
+    }
+
+    private Vector3 ClampWorldPositionToChunk(Vector3 point, Vector3Int chunkCoord)
+    {
+        Vector3 chunkMin = GetChunkWorldPosition(chunkCoord);
+        // CRITICAL FIX: Clamp to the last valid density point, not the start of the next chunk
+        // Density grid has (chunkSize + 1) points, but the max valid position is at chunkSize * voxelSize - epsilon
+        // We subtract a small epsilon to ensure we stay within the valid density grid range (0 to chunkSize)
+        float epsilon = voxelSize * 0.001f; // Very small offset to stay within bounds
+        Vector3 chunkMax = chunkMin + new Vector3(chunkSize, chunkSize, chunkSize) * voxelSize - Vector3.one * epsilon;
+        
+        float clampedX = Mathf.Clamp(point.x, chunkMin.x, chunkMax.x);
+        float clampedY = Mathf.Clamp(point.y, chunkMin.y, chunkMax.y);
+        float clampedZ = Mathf.Clamp(point.z, chunkMin.z, chunkMax.z);
+        
+        return new Vector3(clampedX, clampedY, clampedZ);
+    }
+    
+    private Vector3 GetEffectiveBrushPosition(
+        Vector3 sourcePosition,
+        Vector3Int chunkCoord,
+        float influenceRadius,
+        bool allowClamp,
+        out float originalDistance,
+        out float effectiveDistance,
+        out bool wasClamped)
+    {
+        originalDistance = DistanceToChunkBounds(sourcePosition, chunkCoord);
+        wasClamped = allowClamp && originalDistance > influenceRadius;
+        Vector3 adjustedPosition = sourcePosition;
+
+        if (wasClamped)
+        {
+            adjustedPosition = ClampWorldPositionToChunk(sourcePosition, chunkCoord);
+            effectiveDistance = DistanceToChunkBounds(adjustedPosition, chunkCoord);
+        }
+        else
+        {
+            effectiveDistance = originalDistance;
+        }
+
+        return adjustedPosition;
+    }
+    
+    private void LogChunkModificationSummary(
+        Vector3Int chunkCoord,
+        Vector3 worldPos,
+        Vector3 chunkOrigin,
+        float brushRadius,
+        Vector3Int localMiningPos,
+        bool wasSolid,
+        bool anyDensityChanged,
+        int pointsProcessed,
+        int pointsPassedFalloff,
+        int pointsPassedThreshold,
+        int pointsSetSuccessfully,
+        int pointsSkippedFalloff,
+        bool forceBoundaryFalloff)
+    {
+        if (!ShouldLogChunkDiagnostics(chunkCoord))
+        {
+            return;
+        }
+
+        Vector3 chunkMin = chunkOrigin;
+        Vector3 chunkMax = chunkMin + new Vector3(chunkSize, chunkSize, chunkSize) * voxelSize;
+        Vector3 clamped = ClampWorldPositionToChunk(worldPos, chunkCoord);
+        float distanceToBounds = Vector3.Distance(worldPos, clamped);
+
+        Debug.Log($"[MOD_DIAG:{chunkCoord}] brush={worldPos} clamped={clamped} distToBounds={distanceToBounds:F2} " +
+                  $"radius={brushRadius:F2} local={localMiningPos} wasSolid={wasSolid} changed={anyDensityChanged} forceFalloff={forceBoundaryFalloff} " +
+                  $"processed={pointsProcessed} passFalloff={pointsPassedFalloff} passThreshold={pointsPassedThreshold} " +
+                  $"set={pointsSetSuccessfully} skippedFalloff={pointsSkippedFalloff}");
     }
 
     private float CalculateDensityAtPoint(Vector3 worldPos)
@@ -3191,8 +3609,88 @@ public class World : MonoBehaviour
             // QueueDensityUpdate won't filter it out
             float distanceToChunk = DistanceToChunkBounds(worldPos, chunkCoord);
             
+            // CRITICAL FIX: Check if this chunk is marked for modification or has pending updates
+            // If so, it was explicitly included in affectedChunks and should NOT be filtered out
+            // This handles the race condition where cache might be invalidated between GetAffectedChunks and QueueDensityUpdate
+            bool isMarkedForModification = IsSolidChunkMarkedForModification(chunkCoord);
+            bool hasPendingUpdates = HasPendingUpdates(chunkCoord);
+            bool isForcedForLoad = IsChunkForcedForLoad(chunkCoord);
+            
             // Check if this is a solid chunk (same logic as GetAffectedChunks)
-            bool isSolidChunk = TerrainAnalysisCache.TryGetAnalysis(chunkCoord, out var analysis) && analysis.IsSolid;
+            // CRITICAL: If cache was invalidated, analysis might be null, so check that first
+            bool isSolidChunk = false;
+            bool hasCacheData = TerrainAnalysisCache.TryGetAnalysis(chunkCoord, out var analysis);
+            if (hasCacheData)
+            {
+                isSolidChunk = analysis.IsSolid;
+            }
+            
+            Vector3 originalWorldPos = worldPos;
+            
+            // CRITICAL: Do NOT clamp the mining center position here!
+            // All chunks must use the same mining center for consistent spherical falloff across boundaries.
+            // The actual density point filtering happens in ApplyDensityUpdate based on distance.
+            Vector3 effectiveWorldPos = worldPos;
+            
+            float originalDistance = distanceToChunk;
+            bool boundaryClampAllowed = distanceToChunk > radius && (isMarkedForModification || hasPendingUpdates || isForcedForLoad);
+            float effectiveDistance = distanceToChunk;
+            bool wasClamped = false;
+            Vector3 clampedWorldPos = effectiveWorldPos; // Start from the chunk-bounds-clamped position
+            
+            if (boundaryClampAllowed)
+            {
+                // Calculate effective distance for filtering, but DON'T change effectiveWorldPos
+                // We need consistent mining center across all chunks for proper spherical falloff
+                clampedWorldPos = GetEffectiveBrushPosition(
+                    originalWorldPos,
+                    chunkCoord,
+                    radius,
+                    boundaryClampAllowed,
+                    out originalDistance,
+                    out effectiveDistance,
+                    out wasClamped);
+                
+                // NOTE: We intentionally do NOT update effectiveWorldPos here!
+                // effectiveWorldPos must remain the original mining center for all chunks
+                
+                if (wasClamped && ShouldLogChunkDiagnostics(chunkCoord))
+                {
+                    Debug.Log($"[MOD_DIAG:{chunkCoord}] Boundary clamp -> source={originalWorldPos} adjusted={clampedWorldPos} sourceDist={originalDistance:F2} radius={radius:F2}");
+                }
+            }
+            else
+            {
+                effectiveDistance = distanceToChunk;
+            }
+            
+            distanceToChunk = effectiveDistance;
+            
+            if (ShouldLogChunkDiagnostics(chunkCoord) || IsProblematicCoordinate(chunkCoord))
+            {
+                string prefix = IsProblematicCoordinate(chunkCoord) ? "[COORD_5_DEBUG]" : $"[MOD_DIAG:{chunkCoord}]";
+                Debug.Log($"{prefix} QueueDensityUpdate -> source={originalWorldPos} brush={effectiveWorldPos} " +
+                          $"sourceDist={originalDistance:F2} distToBounds={distanceToChunk:F2} radius={radius:F2} " +
+                          $"pending={hasPendingUpdates} forced={isForcedForLoad} marked={isMarkedForModification} solid={isSolidChunk} cacheHit={hasCacheData}");
+            }
+            
+            // CRITICAL FIX: If chunk is marked for modification or already has pending updates,
+            // it was explicitly included in affectedChunks - don't filter it out!
+            // Use extended radius check to match GetAffectedChunks behavior for solid chunks
+            bool skipDistanceFiltering = isMarkedForModification || hasPendingUpdates || isForcedForLoad;
+            if (skipDistanceFiltering)
+            {
+                // This chunk was explicitly included in affectedChunks - use extended radius
+                // to match GetAffectedChunks behavior (radius * 1.5f for solid chunks)
+                float effectiveRadius = isSolidChunk ? radius * 1.5f : radius + voxelSize;
+                if (distanceToChunk > effectiveRadius * 1.2f) // Add 20% margin for safety
+                {
+                    Debug.LogWarning($"[QueueDensityUpdate] Chunk {chunkCoord} exceeded extended radius but is protected (distance: {distanceToChunk:F2}, " +
+                        $"effectiveRadius: {effectiveRadius * 1.2f:F2}, Marked:{isMarkedForModification}, Pending:{hasPendingUpdates}, Forced:{isForcedForLoad})");
+                    // Still allow it - it was explicitly marked, so trust that it needs the update
+                }
+                Debug.Log($"[QueueDensityUpdate] Chunk {chunkCoord} exempt from distance filter (Marked:{isMarkedForModification}, Pending:{hasPendingUpdates}, Forced:{isForcedForLoad})");
+            }
             
             // Use the EXACT same distance checks as GetAffectedChunks:
             // - Normal chunks: distanceToChunk <= radius + voxelSize
@@ -3207,28 +3705,44 @@ public class World : MonoBehaviour
                 withinRange = distanceToChunk <= radius + voxelSize; // Same as GetAffectedChunks for normal chunks
             }
             
-            if (!withinRange)
+            // CRITICAL FIX: Don't filter out chunks that are marked for modification or have pending updates
+            // These were explicitly included in affectedChunks and should always get updates
+            // Note: effectiveWorldPos is already clamped to chunk bounds at the start of this function
+            bool forceBoundaryFalloff = false;
+            
+            if (!withinRange && !skipDistanceFiltering)
             {
                 // DEBUG: Log when updates are filtered out by distance
-                Debug.LogWarning($"[QueueDensityUpdate] Chunk {chunkCoord} filtered out - worldPos {worldPos} too far. " +
+                Debug.LogWarning($"[QueueDensityUpdate] Chunk {chunkCoord} filtered out - worldPos {originalWorldPos} too far. " +
                     $"Distance to chunk bounds: {distanceToChunk:F2}, " +
                     $"Radius check: {(isSolidChunk ? radius * 1.5f : radius + voxelSize):F2}, " +
                     $"IsSolid: {isSolidChunk}, Chunk bounds: {chunkMin} to {chunkMax}");
                 LogChunkTrace(chunkCoord, $"Density update FILTERED OUT - distance {distanceToChunk:F2} > radius {(isSolidChunk ? radius * 1.5f : radius + voxelSize):F2}");
                 return;
             }
+            else if (!withinRange && skipDistanceFiltering)
+            {
+                // When forced through despite being out of range, use boundary falloff for solid chunks
+                forceBoundaryFalloff = isSolidChunk;
+                float clampDelta = Vector3.Distance(originalWorldPos, effectiveWorldPos);
+                
+                Debug.Log($"[QueueDensityUpdate] Chunk {chunkCoord} outside normal radius but forced through (Marked:{isMarkedForModification}, Pending:{hasPendingUpdates}, Forced:{isForcedForLoad}). " +
+                    $"OriginalPos: {originalWorldPos}, ClampedPos: {effectiveWorldPos}, ClampDelta: {clampDelta:F2}, ForceFalloff: {forceBoundaryFalloff}");
+                LogChunkTrace(chunkCoord, $"QueueDensityUpdate: FORCED path - originalPos {originalWorldPos}, clampedPos {effectiveWorldPos}, clampDelta {clampDelta:F2}, ForceFalloff: {forceBoundaryFalloff}");
+            }
             
             // DEBUG: Log successful queue attempts
-            Debug.Log($"[QueueDensityUpdate] Queuing density update for chunk {chunkCoord} at worldPos {worldPos}");
-            LogChunkTrace(chunkCoord, $"Density update queued successfully - worldPos: {worldPos}, distance: {distanceToChunk:F2}");
+            Debug.Log($"[QueueDensityUpdate] Queuing density update for chunk {chunkCoord} at worldPos {effectiveWorldPos} (original: {originalWorldPos}, forceFalloff={forceBoundaryFalloff})");
+            LogChunkTrace(chunkCoord, $"Density update queued successfully - effectivePos: {effectiveWorldPos}, originalPos: {originalWorldPos}, distance: {distanceToChunk:F2}, forceFalloff: {forceBoundaryFalloff}");
 
             if (!pendingDensityPointUpdates.ContainsKey(chunkCoord))
             {
                 pendingDensityPointUpdates[chunkCoord] = new List<PendingDensityPointUpdate>();
             }
 
-            // Convert world position to this chunk's local coordinate system
-            Vector3Int localPos = Coord.WorldToVoxelCoord(worldPos, chunkOrigin, voxelSize);
+            // CRITICAL FIX: Use the effectiveWorldPos (clamped if necessary) instead of originalWorldPos
+            // This ensures that when mining outside a chunk, we update the boundary points correctly
+            Vector3Int localPos = Coord.WorldToVoxelCoord(effectiveWorldPos, chunkOrigin, voxelSize);
             
             // For boundary updates, we need to allow voxel coordinates from -1 to chunkSize-1
             // This ensures density points at 0 (voxel -1) and chunkSize (voxel chunkSize-1) can be updated
@@ -3260,8 +3774,10 @@ public class World : MonoBehaviour
                 Debug.Log($"Queuing special solid chunk update for {chunkCoord} at {densityPos} with density {targetDensity}");
             }
             
+            // CRITICAL FIX: Use effectiveWorldPos (which may be clamped) instead of originalWorldPos
+            // This ensures ApplyDensityUpdate receives the correct position for boundary chunks
             pendingDensityPointUpdates[chunkCoord].Add(
-                new PendingDensityPointUpdate(densityPos, targetDensity, worldPos));
+                new PendingDensityPointUpdate(densityPos, targetDensity, effectiveWorldPos, forceBoundaryFalloff));
             
             // CRITICAL FIX: If this is a solid chunk, mark it for modification immediately
             if (isSolidChunk)
@@ -3276,13 +3792,16 @@ public class World : MonoBehaviour
             {
                 var state = ChunkStateManager.Instance.GetChunkState(chunkCoord);
                 bool isQuarantined = ChunkStateManager.Instance.QuarantinedChunks.Contains(chunkCoord);
-                bool hasPendingUpdates = pendingDensityPointUpdates.ContainsKey(chunkCoord);
+                bool chunkHasPendingUpdates = pendingDensityPointUpdates.ContainsKey(chunkCoord);
+                bool chunkHasPendingVoxels = pendingVoxelUpdates.ContainsKey(chunkCoord);
+                bool shouldForceLoad = chunkHasPendingUpdates || chunkHasPendingVoxels || isForcedForLoad;
                 
                 // DEBUG: Log chunk state when requesting load
                 Debug.Log($"[QueueDensityUpdate] Requesting load for chunk {chunkCoord} - " +
                     $"State: {state.Status}, Quarantined: {isQuarantined}, Solid: {isSolidChunk}, " +
-                    $"HasPendingUpdates: {hasPendingUpdates}, PendingCount: {(hasPendingUpdates ? pendingDensityPointUpdates[chunkCoord].Count : 0)}");
-                LogChunkTrace(chunkCoord, $"Load requested - State: {state.Status}, Quarantined: {isQuarantined}, Solid: {isSolidChunk}, HasPendingUpdates: {hasPendingUpdates}");
+                    $"HasPendingUpdates: {chunkHasPendingUpdates}, HasPendingVoxels: {chunkHasPendingVoxels}, ForcedFlag: {isForcedForLoad}, " +
+                    $"PendingCount: {(chunkHasPendingUpdates ? pendingDensityPointUpdates[chunkCoord].Count : 0)}");
+                LogChunkTrace(chunkCoord, $"Load requested - State: {state.Status}, Quarantined: {isQuarantined}, Solid: {isSolidChunk}, HasPendingUpdates: {chunkHasPendingUpdates}, Forced: {isForcedForLoad}");
                 
                 if (isQuarantined)
                 {
@@ -3293,10 +3812,10 @@ public class World : MonoBehaviour
                 else if (state.Status != ChunkConfigurations.ChunkStatus.Loading)
                 {
                     // CRITICAL FIX: Always request load if chunk has pending updates, regardless of state
-                    // This ensures chunks with pending updates will eventually load
-                    if (hasPendingUpdates)
+                    // This ensures chunks with pending/forced updates will eventually load
+                    if (shouldForceLoad)
                     {
-                        Debug.Log($"[QueueDensityUpdate] Chunk {chunkCoord} has pending updates - forcing load request");
+                        Debug.Log($"[QueueDensityUpdate] Chunk {chunkCoord} has pending/forced updates - forcing load request");
                     }
                     
                     if (isSolidChunk)
@@ -3323,24 +3842,32 @@ public class World : MonoBehaviour
         }
     }
 
-    public void RequestChunkLoad(Vector3Int chunkCoord)
+    public void RequestChunkLoad(Vector3Int chunkCoord, bool force = false)
     {
         bool isQuarantined = ChunkStateManager.Instance.QuarantinedChunks.Contains(chunkCoord);
         bool hasPendingUpdates = HasPendingUpdates(chunkCoord);
+        bool shouldForceLoad = force || hasPendingUpdates;
         
-        // CRITICAL FIX: Allow loading quarantined chunks if they have pending updates
-        // This enables recovery of stuck chunks that have modifications queued
-        if (isQuarantined && !hasPendingUpdates)
+        if (isQuarantined && !shouldForceLoad)
         {
             Debug.LogWarning($"[RequestChunkLoad] Skipping load request for QUARANTINED chunk {chunkCoord} (no pending updates)");
             LogChunkTrace(chunkCoord, $"RequestChunkLoad: Skipped - quarantined with no pending updates");
             return;
         }
         
-        if (isQuarantined && hasPendingUpdates)
+        if (isQuarantined && shouldForceLoad)
         {
-            Debug.LogWarning($"[RequestChunkLoad] Allowing load request for QUARANTINED chunk {chunkCoord} because it has pending updates");
-            LogChunkTrace(chunkCoord, $"RequestChunkLoad: Allowing quarantined chunk load - has pending updates");
+            Debug.LogWarning($"[RequestChunkLoad] Allowing load request for QUARANTINED chunk {chunkCoord} (force={force}, pending updates={hasPendingUpdates})");
+            LogChunkTrace(chunkCoord, $"RequestChunkLoad: Allowing quarantined chunk load - force={force}, pending={hasPendingUpdates}");
+            ChunkStateManager.Instance.QuarantinedChunks.Remove(chunkCoord);
+            var state = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+            if (state.Status == ChunkConfigurations.ChunkStatus.Error)
+            {
+                ChunkStateManager.Instance.TryChangeState(
+                    chunkCoord,
+                    ChunkConfigurations.ChunkStatus.None,
+                    ChunkConfigurations.ChunkStateFlags.None);
+            }
         }
 
         // Skip if chunk is already loaded or in queue
@@ -3350,20 +3877,20 @@ public class World : MonoBehaviour
             
             // DEBUG: Log load request details
             Debug.Log($"[RequestChunkLoad] Chunk {chunkCoord} - " +
-                $"State: {state.Status}, Quarantined: {isQuarantined}, HasPendingUpdates: {hasPendingUpdates}, " +
+                $"State: {state.Status}, Quarantined: {isQuarantined}, HasPendingUpdates: {hasPendingUpdates}, Force: {force}, " +
                 $"VoxelUpdates: {pendingVoxelUpdates.ContainsKey(chunkCoord)}, " +
                 $"DensityUpdates: {pendingDensityPointUpdates.ContainsKey(chunkCoord)}");
-            LogChunkTrace(chunkCoord, $"RequestChunkLoad called - State: {state.Status}, Quarantined: {isQuarantined}, HasPendingUpdates: {hasPendingUpdates}, Immediate: {hasPendingUpdates}, QuickCheck: {!hasPendingUpdates}");
+            LogChunkTrace(chunkCoord, $"RequestChunkLoad called - State: {state.Status}, Quarantined: {isQuarantined}, HasPendingUpdates: {hasPendingUpdates}, Force: {force}, Immediate: {shouldForceLoad}, QuickCheck: {!shouldForceLoad}");
                                     
             try
             {
                 operationsQueue.QueueChunkForLoad(
                     chunkCoord,
-                    immediate: hasPendingUpdates,
-                    quickCheck: !hasPendingUpdates);
+                    immediate: shouldForceLoad,
+                    quickCheck: !shouldForceLoad);
                 
-                Debug.Log($"[RequestChunkLoad] Successfully queued chunk {chunkCoord} for load (immediate: {hasPendingUpdates}, quickCheck: {!hasPendingUpdates})");
-                LogChunkTrace(chunkCoord, $"Successfully queued for load - Immediate: {hasPendingUpdates}, QuickCheck: {!hasPendingUpdates}");
+                Debug.Log($"[RequestChunkLoad] Successfully queued chunk {chunkCoord} for load (immediate: {shouldForceLoad}, quickCheck: {!shouldForceLoad})");
+                LogChunkTrace(chunkCoord, $"Successfully queued for load - Immediate: {shouldForceLoad}, QuickCheck: {!shouldForceLoad}");
             }
             catch (Exception e)
             {
@@ -3430,7 +3957,7 @@ public class World : MonoBehaviour
                     Vector3 worldPos = update.worldPosition;
                     
                     // Use ApplyDensityUpdate for proper radius-based update
-                    bool densityChanged = ApplyDensityUpdate(chunk, worldPos, false);
+                    bool densityChanged = ApplyDensityUpdate(chunk, worldPos, false, update.forceBoundaryFalloff);
                     if (densityChanged)
                     {
                         anyDensityChanged = true;
@@ -3447,6 +3974,7 @@ public class World : MonoBehaviour
                 {
                     Debug.Log($"[ProcessPendingUpdatesForChunk] Processed {updates.Count} updates for chunk {chunkCoord}, density changed - marking as modified");
                     LogChunkTrace(chunkCoord, $"ProcessPendingUpdatesForChunk: Density changed successfully - marking as modified");
+                    ClearForcedChunkFlag(chunkCoord, "Density applied via ProcessPendingUpdatesForChunk");
                     
                     // Update terrain analysis immediately
                     TerrainAnalysisCache.InvalidateAnalysis(chunkCoord);
@@ -3819,12 +4347,14 @@ public class World : MonoBehaviour
                                     try
                                     {
                                         // Use ApplyDensityUpdate for proper radius-based update
-                                        bool densityChanged = ApplyDensityUpdate(chunk, worldPos, false);
+                                bool densityChanged = ApplyDensityUpdate(chunk, worldPos, false, update.forceBoundaryFalloff);
                                         if (densityChanged)
                                         {
                                             anyDensityChanged = true;
                                             Debug.Log($"[ProcessPendingUpdates] Density changed for chunk {chunkCoord} at worldPos {worldPos}");
                                             LogChunkTrace(chunkCoord, $"ProcessPendingUpdates: Density changed successfully at {worldPos}");
+                        ClearForcedChunkFlag(chunkCoord, "Density applied via ProcessPendingUpdates");
+                                    ClearForcedChunkFlag(chunkCoord, "Density applied via ProcessPendingUpdates");
                                         }
                                         else
                                         {
@@ -4007,6 +4537,8 @@ public class World : MonoBehaviour
                     Debug.Log($"Forcefully cleared pending density updates for chunk {chunkCoord}");
                 }
 
+                ClearForcedChunkFlag(chunkCoord, "Pending updates cleared");
+
                 // Create a new HashSet without the chunk coordinate
                 var newNeighborUpdates = new HashSet<Vector3Int>(
                     chunksWithPendingNeighborUpdates.Where(coord => coord != chunkCoord)
@@ -4043,7 +4575,10 @@ public class World : MonoBehaviour
             if (!chunk.gameObject.activeInHierarchy || chunk.generationCoroutine != null)
                 continue;
 
-            chunk.Generate(log: false, fullMesh: false);
+            // CRITICAL FIX: Pass fullMesh=true to ensure the mesh actually regenerates from density data
+            // When fullMesh=false and density data exists (e.g., from QuickCheck initialization),
+            // Chunk.Generate applies an EMPTY mesh (0 vertices), leaving a hole in the terrain.
+            chunk.Generate(log: false, fullMesh: true, quickCheck: false);
             chunk.isMeshUpdateQueued = false;
             processedChunks.Add(chunk);
             updatesThisFrame++;
@@ -4257,7 +4792,8 @@ public class World : MonoBehaviour
         {
             hasPendingUpdates = pendingVoxelUpdates.ContainsKey(chunkCoord) || 
                             pendingDensityPointUpdates.ContainsKey(chunkCoord) ||
-                            chunksWithPendingNeighborUpdates.Contains(chunkCoord);
+                            chunksWithPendingNeighborUpdates.Contains(chunkCoord) ||
+                            forcedBoundaryChunks.Contains(chunkCoord);
         }
         return hasPendingUpdates;
     }
@@ -4580,17 +5116,36 @@ public class World : MonoBehaviour
                 // This prevents race conditions where cache check happens before updates are registered
                 // (hasPending and isMarkedForMod already declared above)
                 
-                // Skip empty or solid chunks ONLY if they don't have pending updates
-                // and aren't marked for modification
+                // CRITICAL FIX: Only skip solid/empty chunks if they're ALSO far from all players
+                // If a solid chunk is within the active load radius, it needs to be loaded for
+                // player interaction (mining), collision, and proper rendering of adjacent chunks
                 if ((analysis.IsEmpty || analysis.IsSolid) && 
                     !isMarkedForMod && 
                     !hasPending)
                 {
-                    Debug.Log($"[ShouldLoadChunk] Skipping load of {(analysis.IsEmpty ? "empty" : "solid")} chunk {chunkCoord} - " +
-                        $"HasPendingUpdates: {hasPending}, IsMarkedForMod: {isMarkedForMod}");
-                    LogChunkTrace(chunkCoord, $"ShouldLoadChunk: SKIPPED - {(analysis.IsEmpty ? "empty" : "solid")} chunk, HasPendingUpdates: {hasPending}, IsMarkedForMod: {isMarkedForMod}");
-                    loadValidationCache[chunkCoord] = Time.time;
-                    return false;
+                    // Calculate minimum distance to any player
+                    float minDistanceToPlayers = float.MaxValue;
+                    foreach (var playerEntry in playerChunkCoordinates)
+                    {
+                        Vector3Int playerChunk = playerEntry.Value;
+                        float distance = Vector3Int.Distance(chunkCoord, playerChunk);
+                        minDistanceToPlayers = Mathf.Min(minDistanceToPlayers, distance);
+                    }
+                    
+                    // Only skip if the chunk is far from all players (beyond vertical load radius)
+                    // This allows players to mine into solid chunks when they get close
+                    if (minDistanceToPlayers > verticalLoadRadius * 1.5f)
+                    {
+                        Debug.Log($"[ShouldLoadChunk] Skipping load of {(analysis.IsEmpty ? "empty" : "solid")} chunk {chunkCoord} - " +
+                            $"distance: {minDistanceToPlayers:F2}, HasPendingUpdates: {hasPending}, IsMarkedForMod: {isMarkedForMod}");
+                        LogChunkTrace(chunkCoord, $"ShouldLoadChunk: SKIPPED - {(analysis.IsEmpty ? "empty" : "solid")} chunk too far, distance: {minDistanceToPlayers:F2}");
+                        loadValidationCache[chunkCoord] = Time.time;
+                        return false;
+                    }
+                    else
+                    {
+                        Debug.Log($"[ShouldLoadChunk] Loading {(analysis.IsEmpty ? "empty" : "solid")} chunk {chunkCoord} - close to player (distance: {minDistanceToPlayers:F2})");
+                    }
                 }
                 
                 // If we have pending updates or are marked for mod, force load
@@ -4641,6 +5196,44 @@ public class World : MonoBehaviour
         }
     }
 
+    private void MarkChunkForForcedLoad(Vector3Int chunkCoord, string reason = null)
+    {
+        lock (updateLock)
+        {
+            if (forcedBoundaryChunks.Add(chunkCoord))
+            {
+                string logMessage = reason != null
+                    ? $"[ForcedChunk] Marked {chunkCoord} for forced load ({reason})"
+                    : $"[ForcedChunk] Marked {chunkCoord} for forced load";
+                Debug.Log(logMessage);
+                LogChunkTrace(chunkCoord, $"Forced load flag set{(reason != null ? $" - {reason}" : string.Empty)}");
+            }
+        }
+    }
+
+    private void ClearForcedChunkFlag(Vector3Int chunkCoord, string reason = null)
+    {
+        lock (updateLock)
+        {
+            if (forcedBoundaryChunks.Remove(chunkCoord))
+            {
+                string logMessage = reason != null
+                    ? $"[ForcedChunk] Cleared forced load flag for {chunkCoord} ({reason})"
+                    : $"[ForcedChunk] Cleared forced load flag for {chunkCoord}";
+                Debug.Log(logMessage);
+                LogChunkTrace(chunkCoord, $"Forced load flag cleared{(reason != null ? $" - {reason}" : string.Empty)}");
+            }
+        }
+    }
+
+    public bool IsChunkForcedForLoad(Vector3Int chunkCoord)
+    {
+        lock (updateLock)
+        {
+            return forcedBoundaryChunks.Contains(chunkCoord);
+        }
+    }
+
     private void CleanupValidationCache()
     {
         if (Time.frameCount % 100 == 0) // Every 100 frames
@@ -4684,6 +5277,47 @@ public class World : MonoBehaviour
             LogChunkTrace(chunkCoord, $"RequestImmediateChunkLoad: Allowing quarantined chunk load - has pending updates");
         }
         
+        // CRITICAL FIX: Handle chunks in Unloading state
+        // If chunk is unloading, we need to wait for it to finish or cancel the unload
+        if (state.Status == ChunkConfigurations.ChunkStatus.Unloading)
+        {
+            Debug.LogWarning($"[RequestImmediateChunkLoad] Chunk {chunkCoord} is currently UNLOADING - " +
+                $"HasPendingUpdates: {hasPendingUpdates}, IsMarkedForMod: {modifiedSolidChunks.Contains(chunkCoord)}");
+            LogChunkTrace(chunkCoord, $"RequestImmediateChunkLoad: Chunk is UNLOADING");
+            
+            // If chunk has pending updates or is marked for modification, cancel the unload
+            // by forcing state to Unloaded so it can be reloaded
+            if (hasPendingUpdates || modifiedSolidChunks.Contains(chunkCoord))
+            {
+                Debug.LogWarning($"[RequestImmediateChunkLoad] Cancelling unload for chunk {chunkCoord} due to pending updates/modifications");
+                LogChunkTrace(chunkCoord, $"RequestImmediateChunkLoad: Cancelling unload due to pending updates");
+                
+                // Try to transition Unloading -> Unloaded -> None so we can reload
+                if (ChunkStateManager.Instance.TryChangeState(
+                    chunkCoord,
+                    ChunkConfigurations.ChunkStatus.Unloaded,
+                    ChunkConfigurations.ChunkStateFlags.None))
+                {
+                    state = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+                    Debug.Log($"[RequestImmediateChunkLoad] Successfully cancelled unload for chunk {chunkCoord}, new state: {state.Status}");
+                    LogChunkTrace(chunkCoord, $"RequestImmediateChunkLoad: Successfully cancelled unload");
+                }
+                else
+                {
+                    Debug.LogError($"[RequestImmediateChunkLoad] Failed to cancel unload for chunk {chunkCoord}");
+                    LogChunkTrace(chunkCoord, $"RequestImmediateChunkLoad: FAILED to cancel unload");
+                    return;
+                }
+            }
+            else
+            {
+                // No pending updates, let unload complete
+                Debug.Log($"[RequestImmediateChunkLoad] Chunk {chunkCoord} is unloading with no pending updates - waiting for unload to complete");
+                LogChunkTrace(chunkCoord, $"RequestImmediateChunkLoad: Waiting for unload to complete");
+                return;
+            }
+        }
+        
         // If chunk exists but is in wrong state, force unload first
         if (chunks.ContainsKey(chunkCoord))
         {
@@ -4700,7 +5334,18 @@ public class World : MonoBehaviour
         {
             Debug.Log($"[RequestImmediateChunkLoad] Queuing chunk {chunkCoord} for immediate load (no quickCheck)");
             LogChunkTrace(chunkCoord, $"RequestImmediateChunkLoad: Queuing for immediate load");
-            operationsQueue.QueueChunkForLoad(chunkCoord, immediate: true, quickCheck: false);
+            
+            // CRITICAL FIX: Add exception handling around QueueChunkForLoad
+            try
+            {
+                operationsQueue.QueueChunkForLoad(chunkCoord, immediate: true, quickCheck: false);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[RequestImmediateChunkLoad] Failed to queue chunk {chunkCoord} for load: {e.Message}\n{e.StackTrace}");
+                LogChunkTrace(chunkCoord, $"RequestImmediateChunkLoad: ERROR - Failed to queue: {e.Message}");
+                OnChunkLoadFailed(chunkCoord, $"QueueChunkForLoad failed: {e.Message}");
+            }
         }
         else
         {
@@ -4877,6 +5522,15 @@ public class World : MonoBehaviour
         ChunkStateManager.Instance.LogChunkError(chunkCoord, error);
         ChunkStateManager.Instance.QuarantinedChunks.Add(chunkCoord);
 
+        var currentState = ChunkStateManager.Instance.GetChunkState(chunkCoord);
+        if (currentState.Status != ChunkConfigurations.ChunkStatus.Error)
+        {
+            ChunkStateManager.Instance.TryChangeState(
+                chunkCoord,
+                ChunkConfigurations.ChunkStatus.Error,
+                ChunkConfigurations.ChunkStateFlags.Error);
+        }
+
         // Clear any pending operations
         if (chunks.TryGetValue(chunkCoord, out Chunk chunk))
         {
@@ -5048,13 +5702,27 @@ public class World : MonoBehaviour
         }
     }
 
+    // Diagnostic: Check if this chunk matches the problematic pattern (|X|=5 or |Z|=5 at Y=-1)
+    private bool IsProblematicCoordinate(Vector3Int chunkCoord)
+    {
+        return chunkCoord.y == -1 && (Mathf.Abs(chunkCoord.x) == 5 || Mathf.Abs(chunkCoord.z) == 5);
+    }
+
     public Vector3 GetChunkWorldPosition(Vector3Int chunkCoord)
     {
-        return new Vector3(
+        Vector3 position = new Vector3(
             chunkCoord.x * chunkSize * voxelSize,
             chunkCoord.y * chunkSize * voxelSize,
             chunkCoord.z * chunkSize * voxelSize
         );
+        
+        // DIAGNOSTIC: Log for problematic coordinates
+        if (IsProblematicCoordinate(chunkCoord))
+        {
+            Debug.Log($"[COORD_5_DEBUG] GetChunkWorldPosition({chunkCoord}) = {position}");
+        }
+        
+        return position;
     }
 
     public void ApplyTerrainModification(Vector3Int chunkCoord, Vector3Int voxelPos, bool isAdding)

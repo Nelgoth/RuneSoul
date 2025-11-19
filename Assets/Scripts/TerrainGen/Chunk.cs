@@ -464,6 +464,19 @@ public class Chunk : MonoBehaviour
                         {
                             Debug.Log($"[Chunk] QuickCheck early exit for chunk {chunkData.ChunkCoordinate} - Empty:{chunkData.IsEmptyChunk}, Solid:{chunkData.IsSolidChunk}");
                         }
+                    
+                    // CRITICAL FIX: Initialize density arrays for solid/empty chunks that weren't loaded from save data
+                    // Without this, the density array stays at 0.0 (uninitialized) and gets saved with corrupt data
+                    // This is the root cause of the symmetrical chunk loading bug at specific coordinates
+                    if (!chunkData.HasSavedData)
+                    {
+                        InitializeQuickCheckChunkDensity();
+                        if (QuickCheckLogsEnabled)
+                        {
+                            Debug.Log($"[Chunk] Initialized QuickCheck density baseline for chunk {chunkData.ChunkCoordinate} (Solid:{chunkData.IsSolidChunk}, Empty:{chunkData.IsEmptyChunk})");
+                        }
+                    }
+                    
                     densityGenerationComplete = true;
                     marchingCubesComplete = true;
                     

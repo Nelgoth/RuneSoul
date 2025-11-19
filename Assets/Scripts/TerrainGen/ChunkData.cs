@@ -220,6 +220,19 @@ public class ChunkData : System.IDisposable
             }
             return false;
         }
+        
+        // CRITICAL FIX: Never skip chunks that were loaded from saved data
+        // The sparse sampling (every 2nd point) can miss boundary modifications from adjacent chunk mining
+        // If a chunk has saved data, it was modified at some point - always regenerate mesh to ensure accuracy
+        if (HasSavedData)
+        {
+            LogQuickCheck($"[QuickCheck] Chunk {coord} has saved data, no early exit (prevents missing boundary modifications)");
+            if (World.Instance != null && World.Instance.IsChunkTraced(coord))
+            {
+                Debug.Log($"[CHUNK_TRACE:{coord}] QuickTerrainCheck: HasSavedData=true, returning false");
+            }
+            return false;
+        }
 
         // First: Check terrain analysis cache
         bool cacheHasValidData = false;
@@ -289,9 +302,9 @@ public class ChunkData : System.IDisposable
                 }
                 else
                 {
-                    // Save analysis for future reference
-                    TerrainAnalysisCache.SaveAnalysis(coord, isEmptyChunk, isSolidChunk, false);
-                    LogQuickCheck($"[QuickCheck] Sampled chunk {coord}: Empty={isEmptyChunk}, Solid={isSolidChunk}");
+                // Save analysis for future reference
+                TerrainAnalysisCache.SaveAnalysis(coord, isEmptyChunk, isSolidChunk, false);
+                LogQuickCheck($"[QuickCheck] Sampled chunk {coord}: Empty={isEmptyChunk}, Solid={isSolidChunk}");
                 }
             }
             
