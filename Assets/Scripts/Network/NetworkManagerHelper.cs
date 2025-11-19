@@ -12,7 +12,6 @@ using Unity.Netcode.Components;
 public class NetworkManagerHelper : MonoBehaviour
 {
     [Header("Player Integration")]
-    [SerializeField] private bool usePlayerSpawner = true;
     [SerializeField] private float initialSetupDelay = 0.5f;
     [SerializeField] private float playerPositionUpdateInterval = 2f;
     
@@ -23,7 +22,6 @@ public class NetworkManagerHelper : MonoBehaviour
     private NetworkManager networkManager;
     private Dictionary<ulong, GameObject> trackedPlayers = new Dictionary<ulong, GameObject>();
     private Dictionary<ulong, Vector3> playerPositions = new Dictionary<ulong, Vector3>();
-    private bool isInitialized = false;
     private float lastPositionUpdateTime = 0f;
 
     private void Awake()
@@ -48,7 +46,6 @@ public class NetworkManagerHelper : MonoBehaviour
             networkManager.OnClientConnectedCallback += OnClientConnected;
             networkManager.OnClientDisconnectCallback += OnClientDisconnect;
             
-            isInitialized = true;
             Debug.Log("[NetworkManagerHelper] Initialized successfully");
         }
     }

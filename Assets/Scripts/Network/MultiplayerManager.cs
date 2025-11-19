@@ -353,7 +353,6 @@ public class MultiplayerManager : MonoBehaviour
             try
             {
                 VerboseLog("Creating lobby with Relay join code");
-                string lobbyDesc = "Voxel world game";
                 int maxPlayers = Math.Min(MaxLobbyPlayers, MaxConnections);
                 
                 // IMPORTANT: Use the Relay-provided join code as both the relay code AND the custom code

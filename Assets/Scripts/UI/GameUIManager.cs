@@ -267,7 +267,7 @@ public class GameUIManager : MonoBehaviour
         }
         else
         {
-            gameManager = FindObjectOfType<GameManager>();
+            gameManager = FindFirstObjectByType<GameManager>();
 
             // Instance might not yet be assigned if GameManager.Awake hasn't executed
             if (gameManager != null && GameManager.Instance == null)
@@ -288,7 +288,7 @@ public class GameUIManager : MonoBehaviour
         if (NetworkManager.Singleton == null)
         {
             // Final fallback - check if a NetworkManager exists but singleton hasn't initialized yet
-            var locatedNetworkManager = FindObjectOfType<NetworkManager>();
+            var locatedNetworkManager = FindFirstObjectByType<NetworkManager>();
 
             if (locatedNetworkManager != null)
             {
@@ -1113,7 +1113,7 @@ public class GameUIManager : MonoBehaviour
             try
             {
                 // Fallback to direct join
-                MultiplayerManager.Instance.JoinLobbyByCodeAsync(cleanedCode);
+                _ = MultiplayerManager.Instance.JoinLobbyByCodeAsync(cleanedCode);
                 // Success/failure handled by event callbacks
             }
             catch (Exception ex)
@@ -1360,7 +1360,6 @@ public class GameUIManager : MonoBehaviour
     {
         Debug.Log($"Starting join process from browser with code: {lobbyCode}");
         
-        bool joinCompleted = false;
         bool joinSuccess = false;
         string errorMessage = "";
         
@@ -1376,14 +1375,12 @@ public class GameUIManager : MonoBehaviour
         // Check the result
         if (joinTask.IsFaulted)
         {
-            joinCompleted = true;
             joinSuccess = false;
             errorMessage = joinTask.Exception?.InnerException?.Message ?? "Unknown error joining lobby";
             Debug.LogError($"Error joining lobby: {errorMessage}");
         }
         else
         {
-            joinCompleted = true;
             joinSuccess = joinTask.Result;
             
             if (!joinSuccess)

@@ -690,7 +690,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e9b1f7a14db82f94f85385474abad857, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ChunkCorruptionDiagnostic
-  runOnStart: 1
+  runOnStart: 0
   specificChunksToCheck:
   - {x: -5, y: -1, z: -1}
   - {x: -6, y: 1, z: -1}
@@ -769,7 +769,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 178d91ddb6240634cb311e00cd266cd2, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ChunkTracingDebugger
-  autoTraceMining: 1
+  autoTraceMining: 0
   chunkToTrace: {x: 0, y: 0, z: 0}
   worldPositionToTrace: {x: 0, y: 0, z: 0}
   chunkToDiagnose: {x: 0, y: 0, z: 0}

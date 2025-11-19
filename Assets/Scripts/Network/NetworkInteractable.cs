@@ -10,7 +10,6 @@ public class NetworkInteractable : NetworkBehaviour
     [Header("Interaction Settings")]
     [SerializeField] private float interactionRange = 3f;
     [SerializeField] private Transform interactionPoint;
-    [SerializeField] private string interactionText = "Press E to Interact";
     [SerializeField] private GameObject interactionPrompt;
     
     // Network variables to track state

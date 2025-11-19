@@ -105,7 +105,6 @@ namespace ControllerAssets
         private int _animIDFreeFall;
         private int _animIDMotionSpeed;
 
-        private bool hasCameraAssigned = false;
         private bool hasInitialized = false;
 #if ENABLE_INPUT_SYSTEM
         private PlayerInput _playerInput;

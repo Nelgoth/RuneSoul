@@ -202,12 +202,14 @@ public class NetworkPlayerInteraction : NetworkBehaviour
         }
     }
     
-    private void OnDestroy()
+    public override void OnDestroy()
     {
         // Ensure we stop any active interaction when destroyed
         if (isInteracting && currentInteractable != null)
         {
             StopInteraction();
         }
+        
+        base.OnDestroy();
     }
 }

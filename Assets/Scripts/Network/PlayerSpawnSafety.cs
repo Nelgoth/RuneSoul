@@ -42,7 +42,6 @@ public class PlayerSpawnSafety : NetworkBehaviour
 
     // Internal state
     private bool isInitialized = false;
-    private bool isTerrainReady = false;
     private bool isGroundFound = false;
     private bool hasEnabledControls = false;
     private Vector3 initialPosition;

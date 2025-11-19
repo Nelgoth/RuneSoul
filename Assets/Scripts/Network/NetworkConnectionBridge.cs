@@ -288,8 +288,6 @@ public class NetworkConnectionBridge : MonoBehaviour
             }
             
             // Ensure authentication is fresh before each attempt
-            bool freshAuth = false;
-            
             if (!Unity.Services.Authentication.AuthenticationService.Instance.IsSignedIn)
             {
                 DebugLog("Re-authenticating before joining lobby");
@@ -310,7 +308,6 @@ public class NetworkConnectionBridge : MonoBehaviour
                 if (authTask.IsCompleted && !authTask.IsFaulted)
                 {
                     DebugLog("Re-authentication successful");
-                    freshAuth = true;
                 }
                 else
                 {
@@ -319,10 +316,6 @@ public class NetworkConnectionBridge : MonoBehaviour
                 
                 // Small delay after auth
                 yield return new WaitForSeconds(0.5f);
-            }
-            else
-            {
-                freshAuth = true;
             }
             
             // Capture any exceptions from join attempt

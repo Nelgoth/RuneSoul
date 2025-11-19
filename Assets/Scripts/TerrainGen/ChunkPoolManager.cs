@@ -43,7 +43,7 @@ public class ChunkPoolManager : MonoBehaviour {
         if (World.Instance != null && World.Instance.Config != null)
             return World.Instance.Config;
 
-        World world = FindObjectOfType<World>();
+        World world = FindFirstObjectByType<World>();
         return world != null ? world.Config : null;
     }
 
@@ -59,7 +59,7 @@ public class ChunkPoolManager : MonoBehaviour {
 
     private GameObject DetermineChunkPrefab()
     {
-        World world = World.Instance != null ? World.Instance : FindObjectOfType<World>();
+        World world = World.Instance != null ? World.Instance : FindFirstObjectByType<World>();
         if (world != null && world.chunkPrefab != null)
         {
             return world.chunkPrefab;

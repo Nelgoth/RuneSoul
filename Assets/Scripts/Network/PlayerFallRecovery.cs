@@ -105,7 +105,7 @@ public class PlayerFallRecovery : NetworkBehaviour
         base.OnNetworkDespawn();
     }
     
-    private void OnDestroy()
+    public override void OnDestroy()
     {
         // Clean up coroutines
         if (checkCoroutine != null)
@@ -119,6 +119,8 @@ public class PlayerFallRecovery : NetworkBehaviour
             StopCoroutine(gravityRestoreCoroutine);
             gravityRestoreCoroutine = null;
         }
+        
+        base.OnDestroy();
     }
 
     private void StartCheckCoroutine()

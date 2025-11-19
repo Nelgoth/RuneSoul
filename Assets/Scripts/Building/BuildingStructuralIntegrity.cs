@@ -20,7 +20,6 @@ public class BuildingStructuralIntegrity : MonoBehaviour
     
     private float currentIntegrity;
     private BuildingPieceInstance pieceInstance;
-    private bool isOnFoundation = false;
     
     private void Awake()
     {
@@ -46,14 +45,12 @@ public class BuildingStructuralIntegrity : MonoBehaviour
         if (CheckFoundationSupport())
         {
             currentIntegrity = foundationIntegrity;
-            isOnFoundation = true;
             return;
         }
         
         // Check support from connected pieces
         float supportIntegrity = CalculateSupportFromPieces();
         currentIntegrity = Mathf.Clamp(supportIntegrity, 0f, maxIntegrity);
-        isOnFoundation = false;
     }
     
     private bool CheckFoundationSupport()
@@ -218,6 +215,7 @@ public class BuildingStructuralIntegrity : MonoBehaviour
         }
     }
 }
+
 
 
 

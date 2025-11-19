@@ -66,7 +66,7 @@ public class PlayerController : MonoBehaviour
         InitializeInventoryManager(cook, false);
 
         // Ensure an EventSystem exists so UI buttons can receive clicks
-        if (FindObjectOfType<EventSystem>() == null){
+        if (FindFirstObjectByType<EventSystem>() == null){
             var esGo = new GameObject("EventSystem");
             esGo.AddComponent<EventSystem>();
             // Prefer the new Input System UI module; fallback to Standalone when unavailable

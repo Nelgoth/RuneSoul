@@ -72,7 +72,7 @@ public class RuntimeNavMeshLink : MonoBehaviour
         Vector3 startPos = start.position;
         Vector3 endPos = end.position;
 
-        if (!force && linkInstance.valid)
+        if (!force && NavMesh.IsLinkValid(linkInstance))
         {
             float startMoved = Vector3.Distance(startPos, lastStartPosition);
             float endMoved = Vector3.Distance(endPos, lastEndPosition);
@@ -95,7 +95,7 @@ public class RuntimeNavMeshLink : MonoBehaviour
         };
 
         linkInstance = NavMesh.AddLink(linkData);
-        linkInstance.owner = this;
+        NavMesh.SetLinkOwner(linkInstance, this);
 
         lastStartPosition = startPos;
         lastEndPosition = endPos;
@@ -104,9 +104,9 @@ public class RuntimeNavMeshLink : MonoBehaviour
 
     private void RemoveLink()
     {
-        if (linkInstance.valid)
+        if (NavMesh.IsLinkValid(linkInstance))
         {
-            linkInstance.Remove();
+            NavMesh.RemoveLink(linkInstance);
         }
         linkInstance = default;
     }

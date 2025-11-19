@@ -371,7 +371,7 @@ public class GameManager : MonoBehaviour
         yield return new WaitForSeconds(0.5f);
         
         // Get the loading controller for progress updates
-        LoadingSceneController loadingController = FindObjectOfType<LoadingSceneController>();
+        LoadingSceneController loadingController = FindFirstObjectByType<LoadingSceneController>();
         if (loadingController == null)
         {
             Debug.LogError("GameManager: LoadingSceneController not found in the loading scene!");
@@ -503,7 +503,7 @@ public class GameManager : MonoBehaviour
         yield return new WaitForSeconds(0.5f);
         
         // Get the loading controller for progress updates
-        LoadingSceneController loadingController = FindObjectOfType<LoadingSceneController>();
+        LoadingSceneController loadingController = FindFirstObjectByType<LoadingSceneController>();
         if (loadingController == null)
         {
             Debug.LogError("GameManager: LoadingSceneController not found in the loading scene!");
@@ -669,7 +669,7 @@ public class GameManager : MonoBehaviour
 
     private void UpdateLoadingProgress(float progress, string status)
     {
-        LoadingSceneController loadingController = FindObjectOfType<LoadingSceneController>();
+        LoadingSceneController loadingController = FindFirstObjectByType<LoadingSceneController>();
         if (loadingController != null)
         {
             loadingController.UpdateProgress(progress, status);
@@ -829,7 +829,7 @@ public class GameManager : MonoBehaviour
         }
         
         // Show error in the loading screen, or return to menu
-        LoadingSceneController loadingController = FindObjectOfType<LoadingSceneController>();
+        LoadingSceneController loadingController = FindFirstObjectByType<LoadingSceneController>();
         if (loadingController != null)
         {
             loadingController.ShowError(error);

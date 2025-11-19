@@ -22,7 +22,7 @@ public class EnsureWorldSaveManager : MonoBehaviour
     public void EnsureManagerExists()
     {
         // First check if it already exists
-        WorldSaveManager existingManager = FindObjectOfType<WorldSaveManager>();
+        WorldSaveManager existingManager = FindFirstObjectByType<WorldSaveManager>();
         
         if (existingManager == null)
         {

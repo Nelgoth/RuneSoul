@@ -73,7 +73,7 @@ public class NetworkServicesInitializer : MonoBehaviour
     private void ConnectUIComponents()
     {
         // Find all relevant UI components and ensure they're connected
-        var gameUIManager = FindObjectOfType<GameUIManager>();
+        var gameUIManager = FindFirstObjectByType<GameUIManager>();
         if (gameUIManager != null)
         {
             DebugLog("Found GameUIManager");
@@ -107,7 +107,7 @@ public class NetworkServicesInitializer : MonoBehaviour
     // Add a static helper to create the initializer if needed
     public static void EnsureInitializer()
     {
-        var existing = FindObjectOfType<NetworkServicesInitializer>();
+        var existing = FindFirstObjectByType<NetworkServicesInitializer>();
         if (existing == null)
         {
             GameObject go = new GameObject("NetworkServicesInitializer");

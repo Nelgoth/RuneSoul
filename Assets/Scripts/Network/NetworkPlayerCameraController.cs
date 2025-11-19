@@ -360,7 +360,7 @@ public class NetworkPlayerCameraController : NetworkBehaviour
         }
     }
 
-    private void OnDestroy()
+    public override void OnDestroy()
     {
         UnsubscribeFromSceneEvents();
 
@@ -374,6 +374,8 @@ public class NetworkPlayerCameraController : NetworkBehaviour
             Destroy(createdMainCameraObject);
             createdMainCameraObject = null;
         }
+        
+        base.OnDestroy();
     }
 
     private void RemoveAudioListeners(GameObject target)

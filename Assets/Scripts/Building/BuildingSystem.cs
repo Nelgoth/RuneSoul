@@ -60,7 +60,7 @@ public class BuildingSystem : NetworkBehaviour
         // Create build menu if not set
         if (buildMenu == null)
         {
-            buildMenu = FindObjectOfType<BuildingMenuUI>();
+            buildMenu = FindFirstObjectByType<BuildingMenuUI>();
             if (buildMenu == null)
             {
                 Debug.LogWarning("BuildingMenuUI not found. Building menu will not be available.");
@@ -432,9 +432,10 @@ public class BuildingSystem : NetworkBehaviour
         }
     }
     
-    private void OnDestroy()
+    public override void OnDestroy()
     {
         preview.HidePreview();
+        base.OnDestroy();
     }
 }
 

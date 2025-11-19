@@ -31,7 +31,7 @@ MonoBehaviour:
   initialLoadChunkMultiplier: 12
   maxInitialLoadChunksPerFrame: 2048
   maxHeight: 64
-  noiseSeed: 15040
+  noiseSeed: 58380
   noiseScale: 0.9
   frequency: 0.9
   MaxJobRetries: 3
@@ -57,9 +57,9 @@ MonoBehaviour:
   autoCalculateChunkPoolSize: 1
   manualChunkPoolSize: 36000
   chunkPoolBufferMultiplier: 1.1
-  terrainCacheLogLevel: 1
+  terrainCacheLogLevel: 0
   enableChunkIOLogs: 0
   enableChunkStateLogs: 0
   enableChunkLifecycleLogs: 0
   enableQuickCheckLogs: 0
-  enableChunkModificationDiagnostics: 1
+  enableChunkModificationDiagnostics: 0

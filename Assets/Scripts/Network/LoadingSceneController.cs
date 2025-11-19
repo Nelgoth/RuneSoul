@@ -182,7 +182,7 @@ public class LoadingSceneController : MonoBehaviour
             Debug.Log("LoadingSceneController: Loading completed successfully");
             
             // Notify any GameUIManager instances that loading is complete
-            var uiManager = FindObjectOfType<GameUIManager>();
+            var uiManager = FindFirstObjectByType<GameUIManager>();
             if (uiManager != null)
             {
                 Debug.Log("LoadingSceneController: Notifying GameUIManager of loading completion");

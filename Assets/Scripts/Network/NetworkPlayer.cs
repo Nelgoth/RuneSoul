@@ -8,9 +8,6 @@ public class NetworkPlayer : NetworkBehaviour
     [Header("Player Components")]
     [SerializeField] private ThirdPersonController controller;
     [SerializeField] private GameObject visualsContainer; // Character model and visuals
-
-    [Header("Network Settings")]
-    [SerializeField] private float networkSendRate = 30f; // Updates per second
     
     // NetworkVariables for position and rotation syncing
     private NetworkVariable<Vector3> networkPosition = new NetworkVariable<Vector3>(

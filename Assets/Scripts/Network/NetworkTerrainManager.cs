@@ -9,7 +9,6 @@ public class NetworkTerrainManager : NetworkBehaviour
     [Header("Terrain Modification Settings")]
     [SerializeField] private float modificationSyncInterval = 0.1f;
     [SerializeField] private int maxModificationsPerSync = 10;
-    [SerializeField] private float ownershipRadius = 10f;
 
     // Singleton pattern for easy access
     public static NetworkTerrainManager Instance { get; private set; }
