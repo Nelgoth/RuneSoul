@@ -72,9 +72,17 @@ public class World : MonoBehaviour
     public Material VoxelMaterial => Config.VoxelMaterial;
     public int noiseSeed => Config.noiseSeed;
     public float maxHeight => Config.maxHeight;
-    public float noiseScale => Config.noiseScale;
-    public float frequency => Config.frequency;
     public float surfaceLevel => Config.surfaceLevel;
+    
+    // Noise layer properties
+    public float baseTerrainFrequency => Config.baseTerrainFrequency;
+    public float baseTerrainScale => Config.baseTerrainScale;
+    public float hillsFrequency => Config.hillsFrequency;
+    public float hillsScale => Config.hillsScale;
+    public float groundFrequency => Config.groundFrequency;
+    public float groundScale => Config.groundScale;
+    public float detailFrequency => Config.detailFrequency;
+    public float detailScale => Config.detailScale;
     private bool ChunkLifecycleLogsEnabled => config != null && config.enableChunkLifecycleLogs;
     
     [Header("Debug Tracing")]
@@ -1078,12 +1086,6 @@ public class World : MonoBehaviour
         chunk.gameObject.SetActive(true);
 
         chunks[coord] = chunk;
-        
-        // DIAGNOSTIC: Log for problematic coordinates
-        if (IsProblematicCoordinate(coord))
-        {
-            Debug.Log($"[COORD_5_DEBUG] RegisterChunk - chunk {coord} registered at position {chunk.transform.position}");
-        }
     }
 
     public bool IsSolidChunkMarkedForModification(Vector3Int chunkCoord)
@@ -1104,7 +1106,7 @@ public class World : MonoBehaviour
                 $"DensityUpdates: {pendingDensityPointUpdates.ContainsKey(coordinate)}");
             LogChunkTrace(coordinate, $"RemoveChunk: CRITICAL - Removing chunk with pending updates! State: {state?.Status}");
         }
-        else
+        else if (ChunkLifecycleLogsEnabled)
         {
             Debug.Log($"[RemoveChunk] Removing chunk {coordinate} (no pending updates, state: {state?.Status})");
             LogChunkTrace(coordinate, $"RemoveChunk: Removing chunk - no pending updates, state: {state?.Status}");
@@ -2818,12 +2820,11 @@ public class World : MonoBehaviour
                 $"GameObject position: {chunkOrigin}, Expected: {expectedOrigin}, Diff: {chunkOrigin - expectedOrigin}");
         }
         
-        // DIAGNOSTIC: Log detailed information for traced chunks OR problematic coordinates
-        if (ShouldLogChunkDiagnostics(chunkCoord) || IsProblematicCoordinate(chunkCoord))
+        // DIAGNOSTIC: Log detailed information for traced chunks
+        if (ShouldLogChunkDiagnostics(chunkCoord))
         {
             var chunkData = chunk.GetChunkData();
-            string prefix = IsProblematicCoordinate(chunkCoord) ? "[COORD_5_DEBUG]" : $"[MOD_DIAG:{chunkCoord}]";
-            Debug.Log($"{prefix} ApplyDensityUpdate called - " +
+            Debug.Log($"[MOD_DIAG:{chunkCoord}] ApplyDensityUpdate called - " +
                 $"worldPos: {worldPos}, " +
                 $"chunkOrigin: {chunkOrigin}, " +
                 $"isAdding: {isAdding}, " +
@@ -2854,15 +2855,7 @@ public class World : MonoBehaviour
         // Convert world mining position to LOCAL density coordinates in this chunk
         Vector3Int localMiningPos = Coord.WorldToDensityCoord(worldPos, chunkOrigin, voxelSize);
         
-        // DIAGNOSTIC: Always log for problematic coordinates
-        if (IsProblematicCoordinate(chunkCoord))
-        {
-            Debug.Log($"[COORD_5_DEBUG] ApplyDensityUpdate conversion - Mining world pos: {worldPos}, chunk origin: {chunkOrigin}, local density pos: {localMiningPos}, totalPointsPerAxis: {totalPointsPerAxis}");
-        }
-        else
-        {
-            Debug.Log($"[ApplyDensityUpdate] Mining world pos: {worldPos}, chunk origin: {chunkOrigin}, local density pos in chunk {chunkCoord}: {localMiningPos}, totalPointsPerAxis: {totalPointsPerAxis}");
-        }
+        Debug.Log($"[ApplyDensityUpdate] Mining world pos: {worldPos}, chunk origin: {chunkOrigin}, local density pos in chunk {chunkCoord}: {localMiningPos}, totalPointsPerAxis: {totalPointsPerAxis}");
         
         // Create bounds for our update region
         int minX, maxX, minY, maxY, minZ, maxZ;
@@ -3326,8 +3319,7 @@ public class World : MonoBehaviour
             if (isMarkedForModification)
             {
                 affectedChunks.Add(chunkCoord);
-                string prefix = IsProblematicCoordinate(chunkCoord) ? "[COORD_5_DEBUG]" : "";
-                Debug.Log($"{prefix}[GetAffectedChunks] Added chunk {chunkCoord} - marked for modification, distance: {distanceToChunk:F2}");
+                Debug.Log($"[GetAffectedChunks] Added chunk {chunkCoord} - marked for modification, distance: {distanceToChunk:F2}");
                 if (isSolidChunk)
                 {
                     MarkSolidChunkForModification(chunkCoord);
@@ -3337,19 +3329,13 @@ public class World : MonoBehaviour
             else if (distanceToChunk <= radius + voxelSize)
             {
                 affectedChunks.Add(chunkCoord);
-                string prefix = IsProblematicCoordinate(chunkCoord) ? "[COORD_5_DEBUG]" : "";
-                Debug.Log($"{prefix}[GetAffectedChunks] Added chunk {chunkCoord} - distance: {distanceToChunk:F2}, radius: {radius + voxelSize:F2}");
+                Debug.Log($"[GetAffectedChunks] Added chunk {chunkCoord} - distance: {distanceToChunk:F2}, radius: {radius + voxelSize:F2}");
                 
                 // If this chunk is solid, make sure we mark it for modification
                 if (isSolidChunk)
                 {
                     MarkSolidChunkForModification(chunkCoord);
                 }
-            }
-            // DIAGNOSTIC: Log when problematic coordinates are NOT added
-            else if (IsProblematicCoordinate(chunkCoord))
-            {
-                Debug.Log($"[COORD_5_DEBUG][GetAffectedChunks] SKIPPED chunk {chunkCoord} - distance: {distanceToChunk:F2}, radius: {radius + voxelSize:F2}, marked: {isMarkedForModification}, solid: {isSolidChunk}");
             }
             // Also include solid chunks that are just a bit further away
             else if (isSolidChunk && distanceToChunk <= radius * 1.5f)
@@ -3469,24 +3455,73 @@ public class World : MonoBehaviour
 
     private float CalculateDensityAtPoint(Vector3 worldPos)
     {
-        FastNoiseLite noise = new FastNoiseLite();
-        noise.SetSeed(noiseSeed);
-        noise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        noise.SetFrequency(frequency);
-
-        float noiseValue = noise.GetNoise(worldPos.x * noiseScale, worldPos.z * noiseScale);
+        // Match the logic from DensityFieldGenerationJob to ensure consistency
         
-        // Match the constants from DensityFieldGenerationJob
-        const float NOISE_MULTIPLIER = 0.5f;
-        const float DENSITY_BUFFER = -0.1f;
-        const float POW_FACTOR = 1.5f;
-
-        noiseValue = (noiseValue + 1f) * NOISE_MULTIPLIER;
-        noiseValue = Mathf.Clamp(noiseValue, 0f, 1f);
-        noiseValue = Mathf.Pow(noiseValue, POW_FACTOR);
-
-        float terrainHeight = noiseValue * maxHeight;
-        return worldPos.y - terrainHeight + DENSITY_BUFFER;
+        // Base terrain (larger features)
+        FastNoiseLite baseNoise = new FastNoiseLite();
+        baseNoise.SetSeed(noiseSeed);
+        baseNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        baseNoise.SetFrequency(baseTerrainFrequency);
+        float baseVal = baseNoise.GetNoise(worldPos.x * baseTerrainScale, worldPos.z * baseTerrainScale);
+        baseVal = (baseVal + 1f) * 0.5f;
+        
+        // Hills
+        FastNoiseLite hillNoise = new FastNoiseLite();
+        hillNoise.SetSeed(noiseSeed + 1000);
+        hillNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        hillNoise.SetFrequency(hillsFrequency);
+        float hillVal = hillNoise.GetNoise(worldPos.x * hillsScale, worldPos.z * hillsScale);
+        hillVal = (hillVal + 1f) * 0.5f;
+        
+        // Ground variation
+        FastNoiseLite groundNoise = new FastNoiseLite();
+        groundNoise.SetSeed(noiseSeed + 2000);
+        groundNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        groundNoise.SetFrequency(groundFrequency);
+        float groundVal = groundNoise.GetNoise(worldPos.x * groundScale, worldPos.z * groundScale);
+        groundVal = (groundVal + 1f) * 0.5f;
+        
+        // Surface detail
+        FastNoiseLite detailNoise = new FastNoiseLite();
+        detailNoise.SetSeed(noiseSeed + 3000);
+        detailNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        detailNoise.SetFrequency(detailFrequency);
+        float detailVal = detailNoise.GetNoise(worldPos.x * detailScale, worldPos.z * detailScale);
+        detailVal = (detailVal + 1f) * 0.5f;
+        
+        // Calculate base height using primary terrain
+        float baseHeight = baseVal * maxHeight;
+        float normalizedHeight = baseVal;
+        
+        // Define height zones
+        float plainsMix = Mathf.SmoothStep(0.3f, 0.7f, normalizedHeight);
+        float mountainMix = Mathf.SmoothStep(0.6f, 0.9f, normalizedHeight);
+        
+        // Apply different characteristics per zone
+        float heightResult = baseHeight;
+        
+        // Plains zone influence
+        heightResult += groundVal * maxHeight * 0.15f * (1.0f - mountainMix);
+        heightResult += detailVal * 2.0f * (1.0f - mountainMix);
+        
+        // Mountain zone influence
+        if (normalizedHeight > 0.6f)
+        {
+            float mountainModifier = hillVal * maxHeight * 0.3f * mountainMix;
+            heightResult += mountainModifier;
+            
+            float peakDetail = detailVal * mountainMix * 1.5f;
+            heightResult += peakDetail;
+        }
+        
+        // Ensure smooth transitions between zones
+        heightResult = Mathf.Lerp(baseHeight, heightResult, Mathf.SmoothStep(0.0f, 1.0f, normalizedHeight));
+        
+        // Convert to density with wider transition zone
+        float heightDifference = worldPos.y - heightResult;
+        float density = heightDifference / (voxelSize * 3f);
+        
+        return density;
     }
     #endregion
     
@@ -3666,10 +3701,9 @@ public class World : MonoBehaviour
             
             distanceToChunk = effectiveDistance;
             
-            if (ShouldLogChunkDiagnostics(chunkCoord) || IsProblematicCoordinate(chunkCoord))
+            if (ShouldLogChunkDiagnostics(chunkCoord))
             {
-                string prefix = IsProblematicCoordinate(chunkCoord) ? "[COORD_5_DEBUG]" : $"[MOD_DIAG:{chunkCoord}]";
-                Debug.Log($"{prefix} QueueDensityUpdate -> source={originalWorldPos} brush={effectiveWorldPos} " +
+                Debug.Log($"[MOD_DIAG:{chunkCoord}] QueueDensityUpdate -> source={originalWorldPos} brush={effectiveWorldPos} " +
                           $"sourceDist={originalDistance:F2} distToBounds={distanceToChunk:F2} radius={radius:F2} " +
                           $"pending={hasPendingUpdates} forced={isForcedForLoad} marked={isMarkedForModification} solid={isSolidChunk} cacheHit={hasCacheData}");
             }
@@ -5136,13 +5170,16 @@ public class World : MonoBehaviour
                     // This allows players to mine into solid chunks when they get close
                     if (minDistanceToPlayers > verticalLoadRadius * 1.5f)
                     {
-                        Debug.Log($"[ShouldLoadChunk] Skipping load of {(analysis.IsEmpty ? "empty" : "solid")} chunk {chunkCoord} - " +
-                            $"distance: {minDistanceToPlayers:F2}, HasPendingUpdates: {hasPending}, IsMarkedForMod: {isMarkedForMod}");
+                        if (ChunkLifecycleLogsEnabled)
+                        {
+                            Debug.Log($"[ShouldLoadChunk] Skipping load of {(analysis.IsEmpty ? "empty" : "solid")} chunk {chunkCoord} - " +
+                                $"distance: {minDistanceToPlayers:F2}, HasPendingUpdates: {hasPending}, IsMarkedForMod: {isMarkedForMod}");
+                        }
                         LogChunkTrace(chunkCoord, $"ShouldLoadChunk: SKIPPED - {(analysis.IsEmpty ? "empty" : "solid")} chunk too far, distance: {minDistanceToPlayers:F2}");
                         loadValidationCache[chunkCoord] = Time.time;
                         return false;
                     }
-                    else
+                    else if (ChunkLifecycleLogsEnabled)
                     {
                         Debug.Log($"[ShouldLoadChunk] Loading {(analysis.IsEmpty ? "empty" : "solid")} chunk {chunkCoord} - close to player (distance: {minDistanceToPlayers:F2})");
                     }
@@ -5702,12 +5739,6 @@ public class World : MonoBehaviour
         }
     }
 
-    // Diagnostic: Check if this chunk matches the problematic pattern (|X|=5 or |Z|=5 at Y=-1)
-    private bool IsProblematicCoordinate(Vector3Int chunkCoord)
-    {
-        return chunkCoord.y == -1 && (Mathf.Abs(chunkCoord.x) == 5 || Mathf.Abs(chunkCoord.z) == 5);
-    }
-
     public Vector3 GetChunkWorldPosition(Vector3Int chunkCoord)
     {
         Vector3 position = new Vector3(
@@ -5715,12 +5746,6 @@ public class World : MonoBehaviour
             chunkCoord.y * chunkSize * voxelSize,
             chunkCoord.z * chunkSize * voxelSize
         );
-        
-        // DIAGNOSTIC: Log for problematic coordinates
-        if (IsProblematicCoordinate(chunkCoord))
-        {
-            Debug.Log($"[COORD_5_DEBUG] GetChunkWorldPosition({chunkCoord}) = {position}");
-        }
         
         return position;
     }

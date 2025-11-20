@@ -408,10 +408,17 @@ public class Chunk : MonoBehaviour
                         maxHeight = World.Instance.maxHeight,
                         chunkWorldPosition = transform.position,
                         seed = World.Instance.noiseSeed,
-                        frequency = World.Instance.frequency,
-                        noiseScale = World.Instance.noiseScale,
                         noiseType = FastNoiseLite.NoiseType.OpenSimplex2,
                         voxelSize = chunkData.VoxelSize,
+                        // Noise layer settings
+                        baseTerrainFrequency = World.Instance.baseTerrainFrequency,
+                        baseTerrainScale = World.Instance.baseTerrainScale,
+                        hillsFrequency = World.Instance.hillsFrequency,
+                        hillsScale = World.Instance.hillsScale,
+                        groundFrequency = World.Instance.groundFrequency,
+                        groundScale = World.Instance.groundScale,
+                        detailFrequency = World.Instance.detailFrequency,
+                        detailScale = World.Instance.detailScale,
                     };
 
                     densityHandle = densityJob.Schedule(chunkData.DensityPoints.Length, 128);
@@ -465,17 +472,11 @@ public class Chunk : MonoBehaviour
                             Debug.Log($"[Chunk] QuickCheck early exit for chunk {chunkData.ChunkCoordinate} - Empty:{chunkData.IsEmptyChunk}, Solid:{chunkData.IsSolidChunk}");
                         }
                     
-                    // CRITICAL FIX: Initialize density arrays for solid/empty chunks that weren't loaded from save data
-                    // Without this, the density array stays at 0.0 (uninitialized) and gets saved with corrupt data
-                    // This is the root cause of the symmetrical chunk loading bug at specific coordinates
-                    if (!chunkData.HasSavedData)
-                    {
-                        InitializeQuickCheckChunkDensity();
-                        if (QuickCheckLogsEnabled)
-                        {
-                            Debug.Log($"[Chunk] Initialized QuickCheck density baseline for chunk {chunkData.ChunkCoordinate} (Solid:{chunkData.IsSolidChunk}, Empty:{chunkData.IsEmptyChunk})");
-                        }
-                    }
+                    // CRITICAL: DO NOT call InitializeQuickCheckChunkDensity() here!
+                    // The density job has ALREADY run and generated real terrain values.
+                    // Calling InitializeQuickCheckChunkDensity() would corrupt those values by mixing
+                    // real terrain data with baseline values, causing chunks to be incorrectly marked as Modified.
+                    // InitializeQuickCheckChunkDensity() is only needed when loading from cache WITHOUT running density generation.
                     
                     densityGenerationComplete = true;
                     marchingCubesComplete = true;
@@ -995,13 +996,19 @@ public class Chunk : MonoBehaviour
         {
             // Solid chunks: all density values should be above surfaceLevel (outside surface)
             baselineDensity = chunkData.SurfaceLevel + 2.0f;
-            Debug.Log($"[InitializeQuickCheckChunkDensity] Initializing SOLID chunk {chunkData.ChunkCoordinate} with baseline density {baselineDensity}");
+            if (QuickCheckLogsEnabled)
+            {
+                Debug.Log($"[InitializeQuickCheckChunkDensity] Initializing SOLID chunk {chunkData.ChunkCoordinate} with baseline density {baselineDensity}");
+            }
         }
         else // isEmpty
         {
             // Empty chunks: all density values should be below surfaceLevel (inside/under surface)
             baselineDensity = chunkData.SurfaceLevel - 2.0f;
-            Debug.Log($"[InitializeQuickCheckChunkDensity] Initializing EMPTY chunk {chunkData.ChunkCoordinate} with baseline density {baselineDensity}");
+            if (QuickCheckLogsEnabled)
+            {
+                Debug.Log($"[InitializeQuickCheckChunkDensity] Initializing EMPTY chunk {chunkData.ChunkCoordinate} with baseline density {baselineDensity}");
+            }
         }
         
         // Initialize all density points with baseline value
@@ -1024,7 +1031,10 @@ public class Chunk : MonoBehaviour
             }
         }
         
-        Debug.Log($"[InitializeQuickCheckChunkDensity] Completed initialization for {(isSolid ? "SOLID" : "EMPTY")} chunk {chunkData.ChunkCoordinate}");
+        if (QuickCheckLogsEnabled)
+        {
+            Debug.Log($"[InitializeQuickCheckChunkDensity] Completed initialization for {(isSolid ? "SOLID" : "EMPTY")} chunk {chunkData.ChunkCoordinate}");
+        }
     }
 
     public Voxel GetVoxel(Vector3Int voxelPosition)

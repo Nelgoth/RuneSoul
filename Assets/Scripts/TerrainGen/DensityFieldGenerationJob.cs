@@ -14,9 +14,17 @@ public struct DensityFieldGenerationJob : IJobParallelFor
     [ReadOnly] public float3 chunkWorldPosition;
     [ReadOnly] public float voxelSize;
     [ReadOnly] public int seed;
-    [ReadOnly] public float noiseScale;
-    [ReadOnly] public float frequency;
     [ReadOnly] public FastNoiseLite.NoiseType noiseType;
+    
+    // Noise layer settings
+    [ReadOnly] public float baseTerrainFrequency;
+    [ReadOnly] public float baseTerrainScale;
+    [ReadOnly] public float hillsFrequency;
+    [ReadOnly] public float hillsScale;
+    [ReadOnly] public float groundFrequency;
+    [ReadOnly] public float groundScale;
+    [ReadOnly] public float detailFrequency;
+    [ReadOnly] public float detailScale;
 
     private FastNoiseLite InitializeNoise(int noiseSeed, float noiseFrequency)
     {
@@ -60,23 +68,23 @@ public struct DensityFieldGenerationJob : IJobParallelFor
         }
 
         // Base terrain (larger features)
-        var baseNoise = InitializeNoise(seed, 0.3f);
-        float baseVal = baseNoise.GetNoise(worldPos.x * 0.02f, worldPos.z * 0.02f);
+        var baseNoise = InitializeNoise(seed, baseTerrainFrequency);
+        float baseVal = baseNoise.GetNoise(worldPos.x * baseTerrainScale, worldPos.z * baseTerrainScale);
         baseVal = (baseVal + 1f) * 0.5f;
         
         // Hills
-        var hillNoise = InitializeNoise(seed + 1000, 0.4f);
-        float hillVal = hillNoise.GetNoise(worldPos.x * 0.04f, worldPos.z * 0.04f);
+        var hillNoise = InitializeNoise(seed + 1000, hillsFrequency);
+        float hillVal = hillNoise.GetNoise(worldPos.x * hillsScale, worldPos.z * hillsScale);
         hillVal = (hillVal + 1f) * 0.5f;
         
         // Ground variation
-        var groundNoise = InitializeNoise(seed + 2000, 0.5f);
-        float groundVal = groundNoise.GetNoise(worldPos.x * 0.08f, worldPos.z * 0.08f);
+        var groundNoise = InitializeNoise(seed + 2000, groundFrequency);
+        float groundVal = groundNoise.GetNoise(worldPos.x * groundScale, worldPos.z * groundScale);
         groundVal = (groundVal + 1f) * 0.5f;
 
         // Surface detail
-        var detailNoise = InitializeNoise(seed + 3000, 0.6f);
-        float detailVal = detailNoise.GetNoise(worldPos.x * 0.16f, worldPos.z * 0.16f);
+        var detailNoise = InitializeNoise(seed + 3000, detailFrequency);
+        float detailVal = detailNoise.GetNoise(worldPos.x * detailScale, worldPos.z * detailScale);
         detailVal = (detailVal + 1f) * 0.5f;
 
         // Calculate base height using primary terrain

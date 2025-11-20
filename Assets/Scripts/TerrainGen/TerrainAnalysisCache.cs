@@ -59,13 +59,9 @@ public static class TerrainAnalysisCache
 
         try
         {
+            // Set base path for reference, but don't create it
+            // The actual cache folders are created in GetCacheFolder() as needed
             cacheDirectory = Path.Combine(Application.persistentDataPath, "TerrainAnalysis");
-            
-            // Ensure directory exists
-            if (!Directory.Exists(cacheDirectory))
-            {
-                Directory.CreateDirectory(cacheDirectory);
-            }
 
             // Get world ID if available
             if (worldId == null && WorldSaveManager.Instance != null && WorldSaveManager.Instance.IsInitialized)

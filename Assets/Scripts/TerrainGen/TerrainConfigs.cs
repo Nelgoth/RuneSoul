@@ -53,10 +53,25 @@ public class TerrainConfigs : ScriptableObject
     [Tooltip("Base terrain height")]
     public float maxHeight = 64f;
     public int noiseSeed = 1234;
-    public float noiseScale = 0.015f;
-    public float frequency = 0.015f;
     [Tooltip("Max retries before quarantine")]
     public int MaxJobRetries = 3;
+    
+    [Header("Noise Layers")]
+    [Tooltip("Base terrain layer (larger features)")]
+    public float baseTerrainFrequency = 0.3f;
+    public float baseTerrainScale = 0.02f;
+    
+    [Tooltip("Hills layer")]
+    public float hillsFrequency = 0.4f;
+    public float hillsScale = 0.04f;
+    
+    [Tooltip("Ground variation layer")]
+    public float groundFrequency = 0.5f;
+    public float groundScale = 0.08f;
+    
+    [Tooltip("Surface detail layer")]
+    public float detailFrequency = 0.6f;
+    public float detailScale = 0.16f;
 
     [Header("Terrain Modification")]
     public float densityInfluenceRadius = 3.5f;
