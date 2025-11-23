@@ -102,6 +102,22 @@ public class TerrainConfigs : ScriptableObject
     [Tooltip("Target FPS")]
     [Range(30, 120)]
     public int TargetFPS = 60;
+    
+    [Header("LOD Settings")]
+    [Tooltip("Legacy LOD distance thresholds (LOD system removed)")]
+    public float[] lodDistances = new float[] { 50f, 100f, 150f, 200f };
+    [Tooltip("Enable mesh colliders for distant chunks")]
+    public bool enableDistantColliders = false;
+    
+    [Header("Save/Load Optimization")]
+    [Tooltip("Use binary format for chunk saves (much faster than JSON)")]
+    public bool useBinaryFormat = true;
+    [Tooltip("Compress binary chunk data (reduces file size by 50-80%)")]
+    public bool compressChunkData = true;
+    [Tooltip("Use async I/O for chunk loading (improves performance)")]
+    public bool useAsyncIO = true;
+    [Tooltip("Enable append-only modification log for fast saves")]
+    public bool enableModificationLog = true;
 
 
     [Header("Visual Settings")]
@@ -180,5 +196,44 @@ public class TerrainConfigs : ScriptableObject
         // Scale vertex buffer with chunk size
         int expectedVertices = chunkSize * chunkSize * chunkSize / 4;
         meshVertexBufferSize = Mathf.Max(meshVertexBufferSize, expectedVertices);
+        
+        // Validate LOD distances
+        if (lodDistances == null || lodDistances.Length < 4)
+        {
+            lodDistances = new float[] { 50f, 100f, 150f, 200f };
+        }
+        
+        // Ensure LOD distances are ascending
+        for (int i = 1; i < lodDistances.Length; i++)
+        {
+            if (lodDistances[i] <= lodDistances[i-1])
+            {
+                lodDistances[i] = lodDistances[i-1] + 10f;
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Initializes SaveSystem with current config settings
+    /// </summary>
+    public void InitializeSaveSystem()
+    {
+        SaveSystem.Initialize();
+        
+        if (useBinaryFormat)
+        {
+            if (compressChunkData)
+            {
+                SaveSystem.SetSaveFormat(SaveSystem.SaveFormat.BinaryCompressed);
+            }
+            else
+            {
+                SaveSystem.SetSaveFormat(SaveSystem.SaveFormat.Binary);
+            }
+        }
+        else
+        {
+            SaveSystem.SetSaveFormat(SaveSystem.SaveFormat.JSON);
+        }
     }
 }

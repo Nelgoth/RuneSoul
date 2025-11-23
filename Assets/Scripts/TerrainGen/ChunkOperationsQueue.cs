@@ -108,6 +108,8 @@ public class ChunkOperationsQueue : MonoBehaviour
 
         return total;
     }
+    
+    public int GetPendingOperationsCount() => GetQueueSize();
 
     public bool HasPendingUnloadOperations()
     {

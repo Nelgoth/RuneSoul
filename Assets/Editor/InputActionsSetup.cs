@@ -13,11 +13,11 @@ public class InputActionsSetup
 
     static void ConfigureInputActions()
     {
-        string assetPath = "Assets/PlayerControls.inputactions";
+        string assetPath = "Assets/Starter Assets/Runtime/InputSystem/StarterAssets.inputactions";
         
         if (!File.Exists(assetPath))
         {
-            Debug.LogWarning("PlayerControls.inputactions not found at: " + assetPath);
+            Debug.LogWarning("StarterAssets.inputactions not found at: " + assetPath);
             return;
         }
 
@@ -30,14 +30,14 @@ public class InputActionsSetup
         {
             // Force reimport to ensure settings are applied
             AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ImportRecursive);
-            Debug.Log("PlayerControls.inputactions has been configured. If errors persist, please:");
-            Debug.Log("1. Select PlayerControls.inputactions in the Project window");
+            Debug.Log("StarterAssets.inputactions has been configured. If errors persist, please:");
+            Debug.Log("1. Select StarterAssets.inputactions in the Project window");
             Debug.Log("2. In the Inspector, check 'Generate C# Class'");
             Debug.Log("3. Click 'Apply'");
         }
         else
         {
-            Debug.LogError("Could not get importer for PlayerControls.inputactions");
+            Debug.LogError("Could not get importer for StarterAssets.inputactions");
         }
     }
 

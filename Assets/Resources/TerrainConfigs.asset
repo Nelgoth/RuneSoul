@@ -31,10 +31,16 @@ MonoBehaviour:
   initialLoadChunkMultiplier: 12
   maxInitialLoadChunksPerFrame: 2048
   maxHeight: 64
-  noiseSeed: 58380
-  noiseScale: 0.9
-  frequency: 0.9
+  noiseSeed: 98564
   MaxJobRetries: 3
+  baseTerrainFrequency: 0.3
+  baseTerrainScale: 0.02
+  hillsFrequency: 0.4
+  hillsScale: 0.04
+  groundFrequency: 0.5
+  groundScale: 0.08
+  detailFrequency: 0.6
+  detailScale: 0.16
   densityInfluenceRadius: 2
   baseDensityStrength: 1
   minDensityChangeThreshold: 0.01
@@ -63,3 +69,8 @@ MonoBehaviour:
   enableChunkLifecycleLogs: 0
   enableQuickCheckLogs: 0
   enableChunkModificationDiagnostics: 0
+  enableDistantColliders: 0
+  useBinaryFormat: 1
+  compressChunkData: 1
+  useAsyncIO: 1
+  enableModificationLog: 1

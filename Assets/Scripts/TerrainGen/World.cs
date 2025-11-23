@@ -631,6 +631,7 @@ public class World : MonoBehaviour
     #region Private Fields
     private Dictionary<Vector3Int, Chunk> chunks = new Dictionary<Vector3Int, Chunk>();
     public int ActiveChunkCount => chunks.Count;
+    public int GetLoadedChunkCount() => chunks.Count;
     private ThirdPersonController playerController;
     private Vector3 playerPosition;
     private Vector3Int lastPlayerChunkCoordinates;
@@ -1010,6 +1011,19 @@ public class World : MonoBehaviour
     // REPLACE InitializeWorld() METHOD
     private void InitializeWorld()
     {
+        // Initialize save system with current config
+        if (Config != null)
+        {
+            Config.InitializeSaveSystem();
+            Debug.Log($"[World] SaveSystem initialized with format: {SaveSystem.GetSaveFormat()}");
+        }
+        else
+        {
+            // Fallback initialization
+            SaveSystem.Initialize();
+            Debug.LogWarning("[World] SaveSystem initialized without config");
+        }
+        
         // Validate manager dependencies
         bool managersMissing = 
             ChunkPoolManager.Instance == null || 
@@ -4900,12 +4914,13 @@ public class World : MonoBehaviour
             }
         }
     }
+    
 
     private void UpdateChunks(Vector3Int centerChunkCoordinates)
     {
         if (ShouldLoadChunk(centerChunkCoordinates))
         {
-            // Always perform a full load for the center chunk to avoid quick-check shortcuts
+            // Always perform a full load for the center chunk
             operationsQueue.QueueChunkForLoad(centerChunkCoordinates, immediate: true, quickCheck: false);
             
             // Also load immediate neighbors

@@ -77,12 +77,36 @@ namespace NelsUtils {
 
     public static class Coord {
         // World -> Chunk coordinates
+        // CRITICAL: Uses FloorToInt which handles negative coordinates correctly
+        // For example: -0.5 -> -1, -16.0 -> -1, -16.1 -> -2
         public static Vector3Int WorldToChunkCoord(Vector3 worldPos, int chunkSize, float voxelSize) {
-            return new Vector3Int(
-                Mathf.FloorToInt(worldPos.x / (chunkSize * voxelSize)),
-                Mathf.FloorToInt(worldPos.y / (chunkSize * voxelSize)), 
-                Mathf.FloorToInt(worldPos.z / (chunkSize * voxelSize))
+            float chunkWorldSize = chunkSize * voxelSize;
+            
+            Vector3Int result = new Vector3Int(
+                Mathf.FloorToInt(worldPos.x / chunkWorldSize),
+                Mathf.FloorToInt(worldPos.y / chunkWorldSize), 
+                Mathf.FloorToInt(worldPos.z / chunkWorldSize)
             );
+            
+            // Verify the calculation is correct by checking reverse transformation
+            #if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (UnityEngine.Random.value < 0.001f) // Sample 0.1% of calls
+            {
+                Vector3 backToWorld = GetWorldPosition(result, chunkSize, voxelSize);
+                float distance = Vector3.Distance(worldPos, backToWorld);
+                
+                if (distance > chunkWorldSize * 1.5f)
+                {
+                    Debug.LogWarning($"[Coord] Potential coordinate transformation error:\n" +
+                        $"  World: {worldPos}\n" +
+                        $"  Chunk: {result}\n" +
+                        $"  BackToWorld: {backToWorld}\n" +
+                        $"  Distance: {distance}");
+                }
+            }
+            #endif
+            
+            return result;
         }
 
         // World -> Voxel coordinates within a chunk
@@ -107,12 +131,19 @@ namespace NelsUtils {
         }
 
         // Get world position from chunk and local coordinates
+        // CRITICAL: This must correctly handle negative chunk coordinates
         public static Vector3 GetWorldPosition(Vector3Int chunkCoord, Vector3Int localPos, int chunkSize, float voxelSize) {
+            // Use explicit casting to ensure proper negative coordinate handling
             return new Vector3(
-                chunkCoord.x * chunkSize * voxelSize + localPos.x * voxelSize,
-                chunkCoord.y * chunkSize * voxelSize + localPos.y * voxelSize,
-                chunkCoord.z * chunkSize * voxelSize + localPos.z * voxelSize
+                (float)chunkCoord.x * chunkSize * voxelSize + localPos.x * voxelSize,
+                (float)chunkCoord.y * chunkSize * voxelSize + localPos.y * voxelSize,
+                (float)chunkCoord.z * chunkSize * voxelSize + localPos.z * voxelSize
             );
+        }
+        
+        // Overload for getting chunk origin position (without local offset)
+        public static Vector3 GetWorldPosition(Vector3Int chunkCoord, int chunkSize, float voxelSize) {
+            return GetWorldPosition(chunkCoord, Vector3Int.zero, chunkSize, voxelSize);
         }
         
         // Get index for density point in flattened array
@@ -144,6 +175,60 @@ namespace NelsUtils {
         public static Vector3 WorldToLocalPosition(Vector3 worldPos, Vector3Int chunkCoord, int chunkSize, float voxelSize) {
             Vector3 chunkWorldPos = GetWorldPosition(chunkCoord, Vector3Int.zero, chunkSize, voxelSize);
             return worldPos - chunkWorldPos;
+        }
+        
+        /// <summary>
+        /// Verifies coordinate calculations for debugging
+        /// </summary>
+        public static bool VerifyCoordinateRoundTrip(Vector3 worldPos, int chunkSize, float voxelSize, out string errorMessage) {
+            Vector3Int chunkCoord = WorldToChunkCoord(worldPos, chunkSize, voxelSize);
+            Vector3 backToWorld = GetWorldPosition(chunkCoord, chunkSize, voxelSize);
+            
+            // The world position should be within the chunk bounds
+            float chunkWorldSize = chunkSize * voxelSize;
+            Vector3 offset = worldPos - backToWorld;
+            
+            bool isValid = offset.x >= 0 && offset.x < chunkWorldSize &&
+                          offset.y >= 0 && offset.y < chunkWorldSize &&
+                          offset.z >= 0 && offset.z < chunkWorldSize;
+            
+            if (!isValid) {
+                errorMessage = $"Coordinate round-trip failed:\n" +
+                    $"  Original: {worldPos}\n" +
+                    $"  ChunkCoord: {chunkCoord}\n" +
+                    $"  ChunkOrigin: {backToWorld}\n" +
+                    $"  Offset: {offset}\n" +
+                    $"  ExpectedRange: [0, {chunkWorldSize})";
+                return false;
+            }
+            
+            errorMessage = null;
+            return true;
+        }
+        
+        /// <summary>
+        /// Tests coordinate calculations specifically for negative coordinates
+        /// </summary>
+        public static void TestNegativeCoordinates(int chunkSize, float voxelSize) {
+            Debug.Log("[Coord] Testing negative coordinate handling...");
+            
+            Vector3[] testPositions = new Vector3[] {
+                new Vector3(-0.5f, 0, 0),
+                new Vector3(-16.0f, 0, 0),
+                new Vector3(-16.1f, 0, 0),
+                new Vector3(-80.0f, -16.0f, -16.0f), // coord (-5, -1, -1) for chunkSize=16
+                new Vector3(0, 0, 0),
+                new Vector3(15.9f, 0, 0)
+            };
+            
+            foreach (var pos in testPositions) {
+                if (!VerifyCoordinateRoundTrip(pos, chunkSize, voxelSize, out string error)) {
+                    Debug.LogError($"[Coord] {error}");
+                } else {
+                    Vector3Int coord = WorldToChunkCoord(pos, chunkSize, voxelSize);
+                    Debug.Log($"[Coord] OK: {pos} -> {coord}");
+                }
+            }
         }
     }
     

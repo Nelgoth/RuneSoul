@@ -56,6 +56,7 @@ public class Chunk : MonoBehaviour
     private bool marchingCubesComplete;
     private bool isInitialized;
     public bool IsInitialized { get; private set; }
+    
 
     private bool ChunkLifecycleLogsEnabled =>
         World.Instance != null &&
@@ -261,6 +262,15 @@ public class Chunk : MonoBehaviour
 
         transform.localScale = Vector3.one;
     }
+    
+    
+    /// <summary>
+    /// Checks if generation is currently running
+    /// </summary>
+    public bool IsGenerating()
+    {
+        return generationCoroutine != null;
+    }
 
     public void UpdateAccessTime()
     {
@@ -354,8 +364,15 @@ public class Chunk : MonoBehaviour
             );
         }
 
-        // Yield at the beginning to distribute frame cost
-        yield return null;
+        // OPTIMIZATION: Only yield if FPS is low or frame time is high
+        // This allows multiple chunks to process per frame when performance is good
+        float targetFrameTime = 1.0f / (World.Instance?.Config?.TargetFPS ?? 60);
+        bool shouldYield = Time.deltaTime > targetFrameTime;
+        
+        if (shouldYield)
+        {
+            yield return null;
+        }
 
         // STEP 1: Initialize allocator
         bool allocatorInitFailed = false;
@@ -383,8 +400,12 @@ public class Chunk : MonoBehaviour
             yield break;
         }
 
-        // Yield to distribute work across frames
-        yield return null;
+        // OPTIMIZATION: Only yield if needed
+        if (shouldYield || Time.deltaTime > targetFrameTime)
+        {
+            yield return null;
+            shouldYield = Time.deltaTime > targetFrameTime;
+        }
 
         // STEP 2: Density generation
         bool densityFailed = false;
@@ -418,7 +439,7 @@ public class Chunk : MonoBehaviour
                         groundFrequency = World.Instance.groundFrequency,
                         groundScale = World.Instance.groundScale,
                         detailFrequency = World.Instance.detailFrequency,
-                        detailScale = World.Instance.detailScale,
+                        detailScale = World.Instance.detailScale
                     };
 
                     densityHandle = densityJob.Schedule(chunkData.DensityPoints.Length, 128);
@@ -540,8 +561,12 @@ public class Chunk : MonoBehaviour
             densityGenerationComplete = true;
         }
 
-        // Yield again to distribute frame cost
-        yield return null;
+        // OPTIMIZATION: Only yield if needed
+        if (shouldYield || Time.deltaTime > targetFrameTime)
+        {
+            yield return null;
+            shouldYield = Time.deltaTime > targetFrameTime;
+        }
 
         // STEP 3: Marching cubes
         bool marchingCubesFailed = false;
@@ -608,15 +633,16 @@ public class Chunk : MonoBehaviour
             yield break;
         }
         
-        // Yield while waiting for marching cubes to complete, distributing frame cost
+        // OPTIMIZATION: Reduced yielding - only yield if job takes too long
         int waitFrames = 0;
         while (!marchingHandle.IsCompleted)
         {
             waitFrames++;
-            // Only yield every few frames for short-running jobs
-            if (waitFrames > 2)
+            // Only yield if job is taking a long time AND frame time is high
+            if (waitFrames > 5 && (shouldYield || Time.deltaTime > targetFrameTime))
             {
                 yield return null;
+                shouldYield = Time.deltaTime > targetFrameTime;
                 waitFrames = 0;
             }
         }
@@ -643,8 +669,12 @@ public class Chunk : MonoBehaviour
             yield break;
         }
 
-        // Yield again to distribute frame cost
-        yield return null;
+        // OPTIMIZATION: Only yield if needed
+        if (shouldYield || Time.deltaTime > targetFrameTime)
+        {
+            yield return null;
+            shouldYield = Time.deltaTime > targetFrameTime;
+        }
 
         // STEP 4: Create mesh
         Vector3[] vertices = null;
