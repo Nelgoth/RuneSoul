@@ -1136,7 +1136,7 @@ public class Chunk : MonoBehaviour
             chunkData.SetVoxel(index, new Voxel(VOXEL_ACTIVE, defaultHealth));
             isMeshUpdateQueued = true;
             
-            World.Instance.HandleVoxelDestruction(chunkData.ChunkCoordinate, voxelPosition);
+            // HandleVoxelDestruction removed - batch system handles this now
             
             pendingVoxelUpdates.Add(new PendingVoxelUpdate(voxelPosition, isAdding: true, propagate: true));
             SendPendingUpdatesToWorld(true);
@@ -1231,8 +1231,7 @@ public class Chunk : MonoBehaviour
             );
         }
 
-        // Tell World to handle density updates
-        World.Instance.HandleVoxelDestruction(chunkData.ChunkCoordinate, voxelPosition);
+        // HandleVoxelDestruction removed - batch system handles density updates now
 
         // Queue mesh update
         Generate(log: false, fullMesh: false, quickCheck: false);

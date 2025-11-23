@@ -243,7 +243,7 @@ public class World : MonoBehaviour
         bool hasPendingDensityUpdates = pendingDensityPointUpdates != null && pendingDensityPointUpdates.ContainsKey(chunkCoord);
         bool isMarkedForMod = modifiedSolidChunks != null && modifiedSolidChunks.Contains(chunkCoord);
         bool isForcedForLoad = IsChunkForcedForLoad(chunkCoord);
-        bool hasQueuedMining = miningOperationQueues != null && miningOperationQueues.ContainsKey(chunkCoord);
+        bool hasQueuedMining = false; // Mining queue system removed
         bool isCurrentlyProcessing = currentlyProcessingChunks != null && currentlyProcessingChunks.Contains(chunkCoord);
         
         TerrainAnalysisData analysis = null;
@@ -270,7 +270,7 @@ public class World : MonoBehaviour
             $"  === PENDING OPERATIONS ===\n" +
             $"  HasPendingVoxelUpdates: {hasPendingVoxelUpdates} (Count: {(hasPendingVoxelUpdates ? pendingVoxelUpdates[chunkCoord].Count : 0)})\n" +
             $"  HasPendingDensityUpdates: {hasPendingDensityUpdates} (Count: {(hasPendingDensityUpdates ? pendingDensityPointUpdates[chunkCoord].Count : 0)})\n" +
-            $"  HasQueuedMining: {hasQueuedMining} (QueueSize: {(hasQueuedMining ? miningOperationQueues[chunkCoord].Count : 0)})\n" +
+            $"  HasQueuedMining: N/A (Mining queue system removed)\n" +
             $"  === TERRAIN ANALYSIS ===\n" +
             $"  IsEmpty: {(analysis != null ? analysis.IsEmpty.ToString() : "N/A (not in cache)")}\n" +
             $"  IsSolid: {(analysis != null ? analysis.IsSolid.ToString() : "N/A (not in cache)")}\n" +
@@ -633,6 +633,10 @@ public class World : MonoBehaviour
     public int ActiveChunkCount => chunks.Count;
     public int GetLoadedChunkCount() => chunks.Count;
     private ThirdPersonController playerController;
+    
+    // Batch modification system
+    private TerrainModificationBatch modificationBatch;
+    private bool isWorldFullyInitialized = false;
     private Vector3 playerPosition;
     private Vector3Int lastPlayerChunkCoordinates;
     private bool playerMovementLocked = false;
@@ -646,8 +650,7 @@ public class World : MonoBehaviour
     public Dictionary<Vector3Int, List<PendingDensityPointUpdate>> pendingDensityPointUpdates = new Dictionary<Vector3Int, List<PendingDensityPointUpdate>>();
     private Dictionary<Vector3Int, Chunk> allChunks = new Dictionary<Vector3Int, Chunk>();
     private HashSet<Vector3Int> currentlyProcessingChunks = new HashSet<Vector3Int>();
-    private Dictionary<Vector3Int, Queue<Vector3Int>> miningOperationQueues = new Dictionary<Vector3Int, Queue<Vector3Int>>();
-    private HashSet<Vector3Int> chunksWithQueuedMining = new HashSet<Vector3Int>();
+    // Mining queues removed - using TerrainModificationBatch system
     #endregion
 
     #region Reusable Lists
@@ -768,61 +771,22 @@ public class World : MonoBehaviour
         DetectAndRecoverStuckChunks();
         TerrainAnalysisCache.Update();
         CleanupValidationCache();
-        ProcessMiningQueues();
-    }
-
-    private void ProcessMiningQueues()
-    {
-        lock (updateLock)
+        
+        // Process batch modifications (ONLY if world is fully initialized)
+        if (isWorldFullyInitialized && modificationBatch != null && Config != null && modificationBatch.ShouldFlush())
         {
-            // Process one mining operation per chunk per frame
-            var chunksToProcess = new List<Vector3Int>(miningOperationQueues.Keys);
-            
-            foreach (var chunkCoord in chunksToProcess)
+            try
             {
-                // Skip if already processing this chunk
-                if (currentlyProcessingChunks.Contains(chunkCoord))
-                {
-                    continue;
-                }
-
-                // Check if chunk is loaded and ready
-                if (!chunks.ContainsKey(chunkCoord))
-                {
-                    var state = ChunkStateManager.Instance.GetChunkState(chunkCoord);
-                    if (state.Status == ChunkConfigurations.ChunkStatus.None || 
-                        state.Status == ChunkConfigurations.ChunkStatus.Unloaded)
-                    {
-                        RequestChunkLoad(chunkCoord);
-                    }
-                    continue;
-                }
-
-                var state2 = ChunkStateManager.Instance.GetChunkState(chunkCoord);
-                if (state2.Status != ChunkConfigurations.ChunkStatus.Loaded && 
-                    state2.Status != ChunkConfigurations.ChunkStatus.Modified)
-                {
-                    continue;
-                }
-
-                // Process one operation from this chunk's queue
-                if (miningOperationQueues[chunkCoord].Count > 0)
-                {
-                    var voxelPos = miningOperationQueues[chunkCoord].Dequeue();
-                    
-                    // Process this mining operation
-                    HandleVoxelDestruction(chunkCoord, voxelPos);
-                    
-                    // Clean up empty queue
-                    if (miningOperationQueues[chunkCoord].Count == 0)
-                    {
-                        miningOperationQueues.Remove(chunkCoord);
-                        chunksWithQueuedMining.Remove(chunkCoord);
-                    }
-                }
+                modificationBatch.FlushBatch();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[World] Error flushing batch: {e.Message}\n{e.StackTrace}");
             }
         }
     }
+
+    // ProcessMiningQueues() removed - now using TerrainModificationBatch system
     #endregion
 
     #region Initialization
@@ -1057,6 +1021,18 @@ public class World : MonoBehaviour
 
         // Cache the operations queue reference
         operationsQueue = ChunkOperationsQueue.Instance;
+        
+        // Initialize batch modification system
+        try
+        {
+            modificationBatch = new TerrainModificationBatch(this, Config);
+            Debug.Log("[World] Batch modification system initialized successfully");
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[World] Failed to initialize batch system: {e.Message}");
+            modificationBatch = null;
+        }
 
         ApplyWorldSeedFromMetadata();
         ResetInitialLoadTracking();
@@ -1071,6 +1047,9 @@ public class World : MonoBehaviour
 
         // Load initial chunks around player
         UpdateChunks(playerPosition);
+        
+        // Mark world as fully initialized - batch system can now flush
+        isWorldFullyInitialized = true;
         
         Debug.Log("World initialized successfully");
     }
@@ -3379,7 +3358,7 @@ public class World : MonoBehaviour
     }
 
     // ADD new method to World.cs to calculate distance to chunk bounds
-    private float DistanceToChunkBounds(Vector3 point, Vector3Int chunkCoord)
+    public float DistanceToChunkBounds(Vector3 point, Vector3Int chunkCoord)
     {
         // Get chunk bounds
         Vector3 chunkMin = GetChunkWorldPosition(chunkCoord);
@@ -3593,30 +3572,39 @@ public class World : MonoBehaviour
 
     public void QueueVoxelUpdate(Vector3Int chunkCoord, Vector3Int voxelPos, bool isAdding, bool propagate)
     {
-        lock (updateLock)
+        // Use batch system if available and world is fully initialized
+        if (modificationBatch != null && Config != null)
         {
-            // If this is a mining operation (destruction with propagation), queue it for sequential processing
-            if (!isAdding && propagate)
+            try
             {
-                // Queue the mining operation instead of processing immediately
-                if (!miningOperationQueues.ContainsKey(chunkCoord))
-                {
-                    miningOperationQueues[chunkCoord] = new Queue<Vector3Int>();
-                }
-                
-                // Always queue - ProcessMiningQueues() will handle processing sequentially
-                miningOperationQueues[chunkCoord].Enqueue(voxelPos);
-                chunksWithQueuedMining.Add(chunkCoord);
-                
-                // Request chunk load if not already loaded
-                if (!chunks.ContainsKey(chunkCoord))
-                {
-                    RequestChunkLoad(chunkCoord);
-                }
-                
+                Vector3 worldPos = Coord.GetWorldPosition(chunkCoord, voxelPos, chunkSize, voxelSize);
+                modificationBatch.AddModification(chunkCoord, voxelPos, worldPos, isAdding, propagate);
                 return;
             }
-
+            catch (Exception e)
+            {
+                Debug.LogError($"[World] Error adding to batch: {e.Message}, falling back to direct");
+            }
+        }
+        
+        // Fallback to direct system if batch not initialized yet or error occurred
+        QueueVoxelUpdateDirect(chunkCoord, voxelPos, isAdding, propagate);
+    }
+    
+    /// <summary>
+    /// Direct voxel update without using batch system. Used for fallback and by batch processor.
+    /// </summary>
+    public void QueueVoxelUpdateDirect(Vector3Int chunkCoord, Vector3Int voxelPos, bool isAdding, bool propagate)
+    {
+        // Safety checks
+        if (pendingVoxelUpdates == null)
+        {
+            Debug.LogError("[World] QueueVoxelUpdateDirect called before pendingVoxelUpdates initialized");
+            return;
+        }
+        
+        lock (updateLock)
+        {
             if (!pendingVoxelUpdates.ContainsKey(chunkCoord))
             {
                 pendingVoxelUpdates[chunkCoord] = new List<PendingVoxelUpdate>();
@@ -3626,7 +3614,6 @@ public class World : MonoBehaviour
             // Check if this chunk is marked as solid in the terrain analysis cache
             if (TerrainAnalysisCache.TryGetAnalysis(chunkCoord, out var analysis) && analysis.IsSolid)
             {
-                // Mark this solid chunk for modification so it gets loaded
                 MarkSolidChunkForModification(chunkCoord);
             }
 
@@ -3889,9 +3876,72 @@ public class World : MonoBehaviour
             }
         }
     }
+    
+    /// <summary>
+    /// Direct density update without complex filtering. Used by batch processor.
+    /// </summary>
+    public void QueueDensityUpdateDirect(Vector3Int chunkCoord, Vector3 worldPos)
+    {
+        // Safety check for Config
+        if (Config == null)
+        {
+            Debug.LogWarning("[World] QueueDensityUpdateDirect called before Config initialized, skipping");
+            return;
+        }
+        
+        lock (updateLock)
+        {
+            // Invalidate terrain analysis cache
+            TerrainAnalysisCache.InvalidateAnalysis(chunkCoord);
+            
+            // Calculate density updates for this chunk
+            Vector3 chunkOrigin = GetChunkWorldPosition(chunkCoord);
+            float radius = voxelSize * (Config.densityInfluenceRadius + 1f);
+            
+            if (!pendingDensityPointUpdates.ContainsKey(chunkCoord))
+            {
+                pendingDensityPointUpdates[chunkCoord] = new List<PendingDensityPointUpdate>();
+            }
+            
+            // Add all density points within radius
+            int totalPointsPerAxis = chunkSize + 1;
+            for (int x = 0; x < totalPointsPerAxis; x++)
+            for (int y = 0; y < totalPointsPerAxis; y++)
+            for (int z = 0; z < totalPointsPerAxis; z++)
+            {
+                Vector3Int densityPos = new Vector3Int(x, y, z);
+                Vector3 pointWorldPos = chunkOrigin + new Vector3(x, y, z) * voxelSize;
+                float distance = Vector3.Distance(pointWorldPos, worldPos);
+                
+                if (distance <= radius)
+                {
+                    float falloff = 1f - Mathf.Clamp01(distance / radius);
+                    float densityChange = falloff * Config.baseDensityStrength;
+                    float newDensity = Config.surfaceLevel + densityChange;
+                    
+                    pendingDensityPointUpdates[chunkCoord].Add(
+                        new PendingDensityPointUpdate(densityPos, newDensity, worldPos));
+                }
+            }
+        }
+    }
 
     public void RequestChunkLoad(Vector3Int chunkCoord, bool force = false)
     {
+        // Safety check - ensure operations queue is initialized
+        if (operationsQueue == null)
+        {
+            Debug.LogWarning("[World] RequestChunkLoad called before operationsQueue initialized, deferring");
+            return;
+        }
+        
+        // Safety check - ensure state manager is available
+        if (ChunkStateManager.Instance == null)
+        {
+            Debug.LogWarning("[World] RequestChunkLoad called before ChunkStateManager available");
+            return;
+        }
+        
         bool isQuarantined = ChunkStateManager.Instance.QuarantinedChunks.Contains(chunkCoord);
         bool hasPendingUpdates = HasPendingUpdates(chunkCoord);
         bool shouldForceLoad = force || hasPendingUpdates;
@@ -5863,7 +5913,39 @@ public class World : MonoBehaviour
 
         Debug.Log("World shutdown preparation complete");
     }
-    public void OnApplicationQuit(){
+    private void OnDestroy()
+    {
+        // Cleanup batch system
+        if (modificationBatch != null)
+        {
+            try
+            {
+                modificationBatch.Dispose();
+                modificationBatch = null;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[World] Error disposing batch system: {e.Message}");
+            }
+        }
+    }
+    
+    public void OnApplicationQuit()
+    {
+        // Cleanup batch system
+        if (modificationBatch != null)
+        {
+            try
+            {
+                modificationBatch.Dispose();
+                modificationBatch = null;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[World] Error disposing batch system on quit: {e.Message}");
+            }
+        }
+        
         TerrainAnalysisCache.OnApplicationQuit();
     }
 }

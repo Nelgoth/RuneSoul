@@ -84,6 +84,17 @@ public class TerrainConfigs : ScriptableObject
     [Tooltip("Maximum range at which players can modify terrain")]
     public float modificationRange = 10f;
 
+    [Header("Modification Batching")]
+    [Tooltip("Time to accumulate modifications before processing batch (seconds)")]
+    [Range(0.05f, 0.5f)]
+    public float batchAccumulationTime = 0.1f;
+    [Tooltip("Maximum number of modifications in a single batch")]
+    [Range(10, 500)]
+    public int maxBatchSize = 100;
+    [Tooltip("Radius of neighbor chunks to check for each modification (reduces from nested 3x3x3)")]
+    [Range(1, 3)]
+    public int neighborChunkRadius = 2;
+
     [Header("Mesh Generation")]
     [Range(0f, 180f)]
     public float normalSmoothingAngle = 120f;

@@ -244,12 +244,14 @@ public class NetworkTerrainManager : NetworkBehaviour
     }
 
     // Called by ThirdPersonController or other components to request terrain modification
+    // NOTE: Now uses TerrainModificationBatch system for improved performance
     public void RequestTerrainModification(Vector3Int chunkCoord, Vector3Int voxelPos, bool isAdding)
     {
         // Handle single player mode or when not spawned
         if (NetworkManager.Singleton == null || !IsSpawned) 
         {
             // Direct application in single player
+            // QueueVoxelUpdate now routes to batch system for better performance
             if (World.Instance != null)
             {
                 World.Instance.QueueVoxelUpdate(chunkCoord, voxelPos, isAdding, true);
@@ -261,6 +263,7 @@ public class NetworkTerrainManager : NetworkBehaviour
         try
         {
             // Apply immediately on the local client for responsiveness
+            // QueueVoxelUpdate now uses batching system - modifications are accumulated and processed efficiently
             if (World.Instance != null)
             {
                 World.Instance.QueueVoxelUpdate(chunkCoord, voxelPos, isAdding, true);
@@ -270,7 +273,7 @@ public class NetworkTerrainManager : NetworkBehaviour
             if (NetworkManager.Singleton.IsClient)
             {
                 SubmitTerrainModificationServerRpc(chunkCoord, voxelPos, isAdding);
-                Debug.Log($"Client requesting terrain modification at chunk {chunkCoord}, voxel {voxelPos}");
+                // Removed excessive logging for performance
             }
         }
         catch (Exception e)
