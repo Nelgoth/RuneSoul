@@ -49,23 +49,34 @@ public static class SaveSystem
     public static void Initialize()
     {
         if (isInitialized)
+        {
+            Debug.Log("[SaveSystem] Already initialized, skipping");
             return;
+        }
             
+        Debug.Log("[SaveSystem] Initializing...");
         cancellationToken = new CancellationTokenSource();
         saveWorker = Task.Run(() => SaveWorkerLoop(cancellationToken.Token));
         isInitialized = true;
         
-        // Initialize modification log
-        if (WorldSaveManager.Instance != null && !string.IsNullOrEmpty(WorldSaveManager.Instance.WorldSaveFolder))
+        // Initialize modification log - but only if one doesn't already exist
+        if (modificationLog == null && WorldSaveManager.Instance != null && !string.IsNullOrEmpty(WorldSaveManager.Instance.WorldSaveFolder))
         {
             try
             {
+                Debug.Log($"[SaveSystem] Creating modification log for: {WorldSaveManager.Instance.WorldSaveFolder}");
                 modificationLog = new ChunkModificationLog(WorldSaveManager.Instance.WorldSaveFolder);
+                Debug.Log($"[SaveSystem] Modification log created successfully");
             }
             catch (Exception ex)
             {
                 Debug.LogError($"Failed to initialize modification log: {ex.Message}");
+                Debug.LogError($"Stack trace: {ex.StackTrace}");
             }
+        }
+        else if (modificationLog != null)
+        {
+            Debug.LogWarning("[SaveSystem] Modification log already exists, skipping creation");
         }
         
         Debug.Log("[SaveSystem] Initialized with async I/O and binary format");
@@ -74,7 +85,10 @@ public static class SaveSystem
     public static void Shutdown()
     {
         if (!isInitialized)
+        {
+            Debug.Log("[SaveSystem] Shutdown called but not initialized, nothing to do");
             return;
+        }
             
         Debug.Log("[SaveSystem] Shutting down, processing remaining saves...");
         
@@ -99,8 +113,19 @@ public static class SaveSystem
         }
         
         // Close modification log
-        modificationLog?.Close();
-        modificationLog = null;
+        if (modificationLog != null)
+        {
+            Debug.Log("[SaveSystem] Closing modification log");
+            try
+            {
+                modificationLog.Close();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Error closing modification log during shutdown: {ex.Message}");
+            }
+            modificationLog = null;
+        }
         
         isInitialized = false;
         Debug.Log("[SaveSystem] Shutdown complete");
@@ -169,6 +194,11 @@ public static class SaveSystem
         modificationLog?.ClearChunkModifications(chunkCoord);
     }
     
+    public static ChunkModificationLog GetModificationLog()
+    {
+        return modificationLog;
+    }
+    
     private static string GetSaveFolder()
     {
         // Use cached path if available
@@ -213,6 +243,9 @@ public static class SaveSystem
         return folderPath + "/" + fileName;
     }
     
+    // Cache for file format detection
+    private static readonly Dictionary<string, bool> fileFormatCache = new Dictionary<string, bool>();
+    
     private static string GetChunkFilePathCached(Vector3Int chunkCoord)
     {
         // Check cache first
@@ -250,8 +283,10 @@ public static class SaveSystem
     {
         if (!isInitialized)
             Initialize();
-            
-        SaveChunkDataAsync(data, currentFormat).Wait();
+        
+        // CRITICAL FIX: Don't use .Wait() - it blocks the main thread!
+        // Fire and forget - the async method will handle it
+        _ = SaveChunkDataAsync(data, currentFormat);
     }
     
     /// <summary>
@@ -329,11 +364,92 @@ public static class SaveSystem
     }
 
     /// <summary>
-    /// Synchronous load (for backward compatibility)
+    /// Synchronous load - performs I/O synchronously to avoid async deferral issues
+    /// This is called during chunk initialization where we need the data immediately
     /// </summary>
     public static bool LoadChunkData(Vector3Int chunkCoord, ChunkData data)
     {
-        return LoadChunkDataAsync(chunkCoord, data).Result;
+        string filePath = GetChunkFilePathCached(chunkCoord);
+        
+        bool fileExists = File.Exists(filePath);
+        if (ShouldLogChunkIO)
+        {
+            Debug.Log($"[SaveSystem] Loading chunk {chunkCoord} from {filePath} (exists={fileExists})");
+        }
+
+        if (!fileExists)
+            return false;
+
+        try
+        {
+            // Read file synchronously
+            byte[] fileData = File.ReadAllBytes(filePath);
+            
+            // Ensure arrays are created
+            data.EnsureArraysCreated();
+            
+            // Detect format
+            bool isBinary;
+            if (fileFormatCache.TryGetValue(filePath, out isBinary))
+            {
+                // Use cached format detection
+            }
+            else
+            {
+                // Detect format from data
+                isBinary = fileData.Length >= 4 && 
+                           BitConverter.ToUInt32(fileData, 0) == 0x434E4B42; // "CKNB" magic number
+                fileFormatCache[filePath] = isBinary;
+            }
+            
+            if (isBinary)
+            {
+                // Binary format
+                bool success = BinaryChunkSerializer.Deserialize(fileData, data);
+                if (!success)
+                {
+                    Debug.LogError($"[SaveSystem] Failed to deserialize binary chunk {chunkCoord}");
+                    return false;
+                }
+            }
+            else
+            {
+                // Legacy JSON format
+                string json = System.Text.Encoding.UTF8.GetString(fileData);
+                JsonUtility.FromJsonOverwrite(json, data);
+                data.LoadFromSerialization();
+            }
+            
+            // Apply any pending modifications from log
+            if (modificationLog != null && modificationLog.HasModifications(chunkCoord))
+            {
+                var modifications = modificationLog.GetModifications(chunkCoord);
+                if (modifications.Count > 0)
+                {
+                    if (ShouldLogChunkIO)
+                    {
+                        Debug.Log($"[SaveSystem] Applying {modifications.Count} pending modifications to chunk {chunkCoord}");
+                    }
+                    
+                    // Apply each modification to the loaded chunk data
+                    foreach (var mod in modifications)
+                    {
+                        // Apply the modification by delegating to ChunkData
+                        data.ApplyModificationFromLog(mod.VoxelPos, mod.IsAdding, mod.DensityChange);
+                    }
+                    
+                    // Mark the data as modified so it will be saved properly
+                    data.HasModifiedData = true;
+                }
+            }
+            
+            return true;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[SaveSystem] Error loading chunk {chunkCoord}: {e}");
+            return false;
+        }
     }
     
     /// <summary>
@@ -360,8 +476,19 @@ public static class SaveSystem
             // Ensure arrays are created
             data.EnsureArraysCreated();
             
-            // Detect format
-            bool isBinary = BinaryChunkSerializer.IsBinaryFormat(filePath);
+            // Detect format - OPTIMIZED: check from already-loaded data instead of re-opening file
+            bool isBinary;
+            if (fileFormatCache.TryGetValue(filePath, out isBinary))
+            {
+                // Use cached format detection
+            }
+            else
+            {
+                // Detect format from data (avoid re-opening file)
+                isBinary = fileData.Length >= 4 && 
+                           BitConverter.ToUInt32(fileData, 0) == 0x434E4B42; // "CKNB" magic number
+                fileFormatCache[filePath] = isBinary;
+            }
             
             if (isBinary)
             {
@@ -385,15 +512,22 @@ public static class SaveSystem
             if (modificationLog != null && modificationLog.HasModifications(chunkCoord))
             {
                 var modifications = modificationLog.GetModifications(chunkCoord);
-                foreach (var mod in modifications)
+                if (modifications.Count > 0)
                 {
-                    // Apply modification to loaded data
-                    // This would require access to World instance to apply properly
-                    // For now, we just log it
                     if (ShouldLogChunkIO)
                     {
-                        Debug.Log($"[SaveSystem] Chunk {chunkCoord} has {modifications.Count} pending modifications");
+                        Debug.Log($"[SaveSystem] Applying {modifications.Count} pending modifications to chunk {chunkCoord}");
                     }
+                    
+                    // Apply each modification to the loaded chunk data
+                    foreach (var mod in modifications)
+                    {
+                        // Apply the modification by delegating to ChunkData
+                        data.ApplyModificationFromLog(mod.VoxelPos, mod.IsAdding, mod.DensityChange);
+                    }
+                    
+                    // Mark the data as modified so it will be saved properly
+                    data.HasModifiedData = true;
                 }
             }
             
@@ -416,13 +550,28 @@ public static class SaveSystem
         chunkFilePathCache.Clear();
         
         // Close and reinitialize modification log
-        modificationLog?.Close();
-        modificationLog = null;
+        if (modificationLog != null)
+        {
+            Debug.Log($"[SaveSystem] Closing existing modification log before reset");
+            try
+            {
+                modificationLog.Close();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Error closing modification log: {ex.Message}");
+            }
+            modificationLog = null;
+            
+            // Give the file system a moment to release the file handle
+            System.Threading.Thread.Sleep(50);
+        }
         
         if (WorldSaveManager.Instance != null && !string.IsNullOrEmpty(WorldSaveManager.Instance.WorldSaveFolder))
         {
             try
             {
+                Debug.Log($"[SaveSystem] Creating new modification log for: {WorldSaveManager.Instance.WorldSaveFolder}");
                 modificationLog = new ChunkModificationLog(WorldSaveManager.Instance.WorldSaveFolder);
             }
             catch (Exception ex)

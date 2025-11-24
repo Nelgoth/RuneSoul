@@ -36,7 +36,11 @@ public class ChunkData : System.IDisposable
     // Properties
     public Vector3Int ChunkCoordinate => chunkCoordinate;
     public ChunkConfigurations.ChunkStatus Status => status;
-    public bool HasModifiedData => hasModifiedData;
+    public bool HasModifiedData 
+    { 
+        get => hasModifiedData; 
+        set => hasModifiedData = value;
+    }
     public bool IsDisposed => isDisposed;
     public float LastAccessTime => lastAccessTime;
     public int PoolId => poolId;
@@ -622,6 +626,116 @@ public class ChunkData : System.IDisposable
 
         voxelData[index] = value;
         hasModifiedData = true;  // Just mark as modified, no save
+        UpdateAccessTime();
+    }
+
+    /// <summary>
+    /// Applies a modification from the modification log directly to the chunk data
+    /// Used when loading chunks with pending modifications
+    /// </summary>
+    public void ApplyModificationFromLog(Vector3Int voxelPos, bool isAdding, float densityChange)
+    {
+        // Ensure arrays are created
+        EnsureArraysCreated();
+        
+        // Validate voxel position
+        if (!Coord.IsVoxelPositionValid(voxelPos, chunkSize))
+        {
+            Debug.LogWarning($"[ChunkData] Invalid voxel position {voxelPos} for chunk {chunkCoordinate}");
+            return;
+        }
+        
+        if (isAdding)
+        {
+            // Adding a voxel - set it to active state
+            int voxelIndex = Coord.GetVoxelIndex(voxelPos, chunkSize);
+            if (voxelIndex >= 0 && voxelIndex < voxelData.Length)
+            {
+                float defaultHealth = 1.0f; // Default voxel health
+                voxelData[voxelIndex] = new Voxel(1, defaultHealth); // 1 = VOXEL_ACTIVE
+                hasModifiedData = true;
+                
+                LogChunkIo($"[ChunkData] Applied ADD modification at {voxelPos} in chunk {chunkCoordinate}");
+            }
+        }
+        else
+        {
+            // Removing a voxel - apply density change
+            if (densityChange != 0)
+            {
+                // Apply density change to surrounding density points
+                // A voxel is defined by 8 corner density points
+                for (int dx = 0; dx <= 1; dx++)
+                for (int dy = 0; dy <= 1; dy++)
+                for (int dz = 0; dz <= 1; dz++)
+                {
+                    Vector3Int densityPos = voxelPos + new Vector3Int(dx, dy, dz);
+                    
+                    if (Coord.IsDensityPositionValid(densityPos, totalPointsPerAxis))
+                    {
+                        int densityIndex = Coord.GetDensityPointIndex(densityPos, totalPointsPerAxis);
+                        if (densityIndex >= 0 && densityIndex < densityPoints.Length)
+                        {
+                            var currentDensity = densityPoints[densityIndex];
+                            float newDensity = currentDensity.density + densityChange;
+                            densityPoints[densityIndex] = new DensityPoint(currentDensity.position, newDensity);
+                            hasModifiedData = true;
+                        }
+                    }
+                }
+                
+                // Update voxel state based on new density
+                int voxelIndex = Coord.GetVoxelIndex(voxelPos, chunkSize);
+                if (voxelIndex >= 0 && voxelIndex < voxelData.Length)
+                {
+                    // Check if voxel should be active or inactive based on surrounding density
+                    bool shouldBeActive = false;
+                    for (int dx = 0; dx <= 1 && !shouldBeActive; dx++)
+                    for (int dy = 0; dy <= 1 && !shouldBeActive; dy++)
+                    for (int dz = 0; dz <= 1 && !shouldBeActive; dz++)
+                    {
+                        Vector3Int densityPos = voxelPos + new Vector3Int(dx, dy, dz);
+                        if (Coord.IsDensityPositionValid(densityPos, totalPointsPerAxis))
+                        {
+                            int densityIndex = Coord.GetDensityPointIndex(densityPos, totalPointsPerAxis);
+                            if (densityIndex >= 0 && densityIndex < densityPoints.Length)
+                            {
+                                if (densityPoints[densityIndex].density < surfaceLevel)
+                                {
+                                    shouldBeActive = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (shouldBeActive)
+                    {
+                        var currentVoxel = voxelData[voxelIndex];
+                        voxelData[voxelIndex] = new Voxel(1, currentVoxel.hitpoints); // Keep active
+                    }
+                    else
+                    {
+                        voxelData[voxelIndex] = new Voxel(0, 0); // Make inactive
+                    }
+                }
+                
+                LogChunkIo($"[ChunkData] Applied REMOVE modification at {voxelPos} with density change {densityChange} in chunk {chunkCoordinate}");
+            }
+            else
+            {
+                // Simple removal without density change
+                int voxelIndex = Coord.GetVoxelIndex(voxelPos, chunkSize);
+                if (voxelIndex >= 0 && voxelIndex < voxelData.Length)
+                {
+                    voxelData[voxelIndex] = new Voxel(0, 0); // 0 = VOXEL_INACTIVE
+                    hasModifiedData = true;
+                    
+                    LogChunkIo($"[ChunkData] Applied REMOVE modification at {voxelPos} in chunk {chunkCoordinate}");
+                }
+            }
+        }
+        
         UpdateAccessTime();
     }
 
