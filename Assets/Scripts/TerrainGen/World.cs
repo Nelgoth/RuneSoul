@@ -243,7 +243,6 @@ public class World : MonoBehaviour
         bool hasPendingDensityUpdates = pendingDensityPointUpdates != null && pendingDensityPointUpdates.ContainsKey(chunkCoord);
         bool isMarkedForMod = modifiedSolidChunks != null && modifiedSolidChunks.Contains(chunkCoord);
         bool isForcedForLoad = IsChunkForcedForLoad(chunkCoord);
-        bool hasQueuedMining = false; // Mining queue system removed
         bool isCurrentlyProcessing = currentlyProcessingChunks != null && currentlyProcessingChunks.Contains(chunkCoord);
         
         TerrainAnalysisData analysis = null;
@@ -637,6 +636,7 @@ public class World : MonoBehaviour
     // Batch modification system
     private TerrainModificationBatch modificationBatch;
     private bool isWorldFullyInitialized = false;
+    public bool IsWorldFullyInitialized => isWorldFullyInitialized;
     private Vector3 playerPosition;
     private Vector3Int lastPlayerChunkCoordinates;
     private bool playerMovementLocked = false;
@@ -701,8 +701,8 @@ public class World : MonoBehaviour
     private int initialLoadEmptyProcessed = 0;
     private int initialLoadTerrainTotal = 0;
     private int initialLoadTerrainProcessed = 0;
-    private enum InitialLoadStage { LoadingChunks, ProcessingTerrainCache, UnloadingEmptyChunks, Complete }
-    private InitialLoadStage initialLoadStage = InitialLoadStage.LoadingChunks;
+    private enum InitialLoadStage { LoadingModifications, LoadingChunks, ProcessingTerrainCache, UnloadingEmptyChunks, Complete }
+    private InitialLoadStage initialLoadStage = InitialLoadStage.LoadingModifications;
     private float initialLoadStartTime = -1f;
     private bool initialLoadCompletionBroadcasted = false;
     private class ChunkUnloadCandidate
@@ -757,20 +757,52 @@ public class World : MonoBehaviour
 
    private void Start()
     {
+        Debug.Log("[World] Start() called, beginning initialization");
         StartCoroutine(InitializeWorldAfterPlayerReady());
     }
 
+    private int updateCallCount = 0;
+    
     private void Update()
     {
-        UpdateWorldState();
-        if (Time.frameCount % 1800 == 0) // Every ~30 seconds at 60fps
+        updateCallCount++;
+        
+        // Log first few updates to diagnose hanging
+        if (updateCallCount <= 10)
         {
-            TerrainAnalysisCache.CleanupOldAnalysis();
+            Debug.Log($"[World] Update() call #{updateCallCount}, isWorldFullyInitialized: {isWorldFullyInitialized}");
         }
-        ProcessQuarantinedChunks();
-        DetectAndRecoverStuckChunks();
-        TerrainAnalysisCache.Update();
-        CleanupValidationCache();
+        
+        try
+        {
+            UpdateWorldState();
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[World] CRITICAL ERROR in UpdateWorldState(): {e.Message}\n{e.StackTrace}");
+            return;
+        }
+        
+        // Only run terrain cache updates after world is initialized
+        if (isWorldFullyInitialized)
+        {
+            if (Time.frameCount % 1800 == 0) // Every ~30 seconds at 60fps
+            {
+                TerrainAnalysisCache.CleanupOldAnalysis();
+            }
+            TerrainAnalysisCache.Update();
+            CleanupValidationCache();
+        }
+        
+        try
+        {
+            ProcessQuarantinedChunks();
+            DetectAndRecoverStuckChunks();
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[World] Error in quarantine processing: {e.Message}");
+        }
         
         // Process batch modifications (ONLY if world is fully initialized)
         if (isWorldFullyInitialized && modificationBatch != null && Config != null && modificationBatch.ShouldFlush())
@@ -792,7 +824,8 @@ public class World : MonoBehaviour
     #region Initialization
     private IEnumerator InitializeWorldAfterPlayerReady()
     {
-        Debug.Log("Starting World initialization...");
+        Debug.Log("[World] InitializeWorldAfterPlayerReady() coroutine started");
+        Debug.Log($"[World] isWorldFullyInitialized = {isWorldFullyInitialized}");
         
         // First wait for required managers with timeout
         float managerWaitTime = 0f;
@@ -902,11 +935,14 @@ public class World : MonoBehaviour
                 
                 try
                 {
+                    Debug.Log("[World] Calling InitializeWorld()...");
                     InitializeWorld();
+                    Debug.Log("[World] InitializeWorld() completed successfully");
                 }
                 catch (Exception e)
                 {
-                    Debug.LogError($"Error during world initialization: {e.Message}\n{e.StackTrace}");
+                    Debug.LogError($"[World] CRITICAL ERROR during InitializeWorld(): {e.GetType().Name}: {e.Message}");
+                    Debug.LogError($"[World] Stack trace: {e.StackTrace}");
                     initFailed = true;
                 }
                 if (WorldSaveManager.Instance != null && WorldSaveManager.Instance.IsInitialized && 
@@ -1045,8 +1081,22 @@ public class World : MonoBehaviour
             Debug.Log($"Initialized player position: {playerPosition}, chunk: {lastPlayerChunkCoordinates}");
         }
 
-        // Load initial chunks around player
-        UpdateChunks(playerPosition);
+        // CRITICAL FIX: Don't load chunks yet if we're waiting for modifications to load
+        // This prevents blocking .Wait() calls on the main thread
+        var modLog = SaveSystem.GetModificationLog();
+        bool waitingForModifications = modLog != null && !modLog.IsLoadingComplete();
+        
+        if (waitingForModifications)
+        {
+            Debug.Log("[World] Deferring chunk loading until modification log finishes loading asynchronously");
+            // Chunks will be loaded once we transition out of LoadingModifications stage
+        }
+        else
+        {
+            // No modifications or already loaded - safe to start loading chunks
+            Debug.Log("[World] No modifications to wait for, starting chunk loading immediately");
+            UpdateChunks(playerPosition);
+        }
         
         // Mark world as fully initialized - batch system can now flush
         isWorldFullyInitialized = true;
@@ -1163,14 +1213,26 @@ public class World : MonoBehaviour
     
     private void UpdateWorldState()
     {
+        if (updateCallCount <= 5)
+        {
+            Debug.Log($"[World] UpdateWorldState() called, frame: {Time.frameCount}");
+        }
+        
         // Check for valid initialization
         if (playerController == null)
         {
             playerController = FindAnyObjectByType<ThirdPersonController>();
             if (playerController == null)
             {
-                Debug.LogWarning("[UpdateWorldState] still waiting on PlayerController");
+                if (updateCallCount <= 20)
+                {
+                    Debug.LogWarning($"[UpdateWorldState] still waiting on PlayerController (attempt {updateCallCount})");
+                }
                 return;
+            }
+            else
+            {
+                Debug.Log("[UpdateWorldState] PlayerController found!");
             }
         }
 
@@ -1184,14 +1246,49 @@ public class World : MonoBehaviour
                 Debug.LogError("ChunkOperationsQueue still null in UpdateWorldState");
                 return;
             }
+            else
+            {
+                Debug.Log("[UpdateWorldState] ChunkOperationsQueue found!");
+            }
         }
 
         if (initialLoadInProgress)
         {
             CleanupStaleInitialLoadEntries();
 
-            if (initialLoadStage == InitialLoadStage.ProcessingTerrainCache)
+            if (initialLoadStage == InitialLoadStage.LoadingModifications)
             {
+                // Wait for modification log to finish loading
+                if (SaveSystem.GetModificationLog() != null)
+                {
+                    if (SaveSystem.GetModificationLog().IsLoadingComplete())
+                    {
+                        Debug.Log($"[World] Modification loading complete, transitioning to LoadingChunks stage");
+                        initialLoadStage = InitialLoadStage.LoadingChunks;
+                    }
+                    else if (Time.frameCount % 60 == 0)
+                    {
+                        Debug.Log($"[World] LoadingModifications stage: waiting for modifications to load...");
+                    }
+                }
+                else
+                {
+                    // No modification log (new world), skip this stage
+                    Debug.Log($"[World] No modification log found, skipping LoadingModifications stage");
+                    initialLoadStage = InitialLoadStage.LoadingChunks;
+                }
+            }
+            else if (initialLoadStage == InitialLoadStage.ProcessingTerrainCache)
+            {
+                int pending = TerrainAnalysisCache.GetPendingSaveCount();
+                bool hasWork = TerrainAnalysisCache.HasPendingWork();
+                
+                // Log every 60 frames (about once per second) during this stage
+                if (Time.frameCount % 60 == 0)
+                {
+                    Debug.Log($"[World] ProcessingTerrainCache stage: {pending} pending saves, hasWork={hasWork}");
+                }
+                
                 TerrainAnalysisCache.ProcessPendingSavesImmediate(InitialLoadTerrainCacheFlushBatch);
             }
             else if (initialLoadStage == InitialLoadStage.UnloadingEmptyChunks)
@@ -1202,7 +1299,9 @@ public class World : MonoBehaviour
             UpdateInitialLoadProgressState();
         }
 
-        bool allowQueueProcessing = !initialLoadInProgress || initialLoadStage != InitialLoadStage.ProcessingTerrainCache;
+        bool allowQueueProcessing = !initialLoadInProgress || 
+                                     (initialLoadStage != InitialLoadStage.ProcessingTerrainCache && 
+                                      initialLoadStage != InitialLoadStage.LoadingModifications);
         if (allowQueueProcessing)
         {
             operationsQueue.ProcessOperations();
@@ -1230,7 +1329,7 @@ public class World : MonoBehaviour
             }
         }
         
-        // Only update chunks if we have a valid player position
+        // Only update chunks if we have a valid player position (and not during modification loading)
         bool allowChunkStreaming = !initialLoadInProgress || initialLoadStage == InitialLoadStage.LoadingChunks;
         if (allowChunkStreaming && playerPosition != Vector3.zero)
         {

@@ -363,7 +363,16 @@ public class ChunkData : System.IDisposable
         {
             LogChunkIo($"[ChunkData] TryLoadData succeeded for {ChunkCoordinate}");
             EnsureArraysCreated(); // Ensure arrays are created before loading
-            LoadFromSerialization();
+            
+            // CRITICAL FIX: Only call LoadFromSerialization if serialized fields exist
+            // For binary format, data is already loaded directly into NativeArrays by BinaryChunkSerializer
+            // For JSON format, SaveSystem.LoadChunkData already calls LoadFromSerialization
+            // This check prevents "Cannot load from null serialized data" errors for binary-saved chunks
+            if (serializedDensityValues != null && serializedVoxelStates != null && serializedVoxelHitpoints != null)
+            {
+                LoadFromSerialization();
+            }
+            
             ValidateDensityPoints(); // Validate loaded data
             
             // CRITICAL FIX: Check if this was a modified solid chunk and update terrain analysis
@@ -435,6 +444,9 @@ public class ChunkData : System.IDisposable
 
     public void LoadFromSerialization()
     {
+        // CRITICAL: This method is only for JSON deserialization
+        // Binary deserialization writes directly to NativeArrays and doesn't populate these fields
+        // TryLoadData now checks if serialized fields exist before calling this method
         if (serializedDensityValues == null || serializedVoxelStates == null || serializedVoxelHitpoints == null)
         {
             Debug.LogError($"Cannot load from null serialized data for chunk {chunkCoordinate}");

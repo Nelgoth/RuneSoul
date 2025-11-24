@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
 
 /// <summary>
@@ -17,6 +18,7 @@ public class ChunkModificationLog
     private readonly object writeLock = new object();
     private FileStream logStream;
     private BinaryWriter logWriter;
+    private Task loadingTask;
     
     // Track modifications in memory for quick lookup
     private Dictionary<Vector3Int, List<VoxelModification>> pendingModifications = 
@@ -59,8 +61,10 @@ public class ChunkModificationLog
         // Open or create log file in append mode
         InitializeLogFile();
         
-        // Load existing modifications into memory
-        LoadExistingModifications();
+        // Start loading modifications asynchronously in the background
+        Debug.Log($"[ChunkModificationLog] Initialized, log file: {logFilePath}");
+        Debug.Log($"[ChunkModificationLog] Starting async modification loading...");
+        loadingTask = Task.Run(() => LoadExistingModificationsAsync());
     }
 
     private void InitializeLogFile()
@@ -69,8 +73,46 @@ public class ChunkModificationLog
         
         try
         {
+            Debug.Log($"[ChunkModificationLog] Opening log file: {logFilePath}");
+            
+            // Validate BEFORE opening the write stream to avoid file sharing conflicts
+            if (!isNewFile)
+            {
+                try
+                {
+                    using (var fs = File.OpenRead(logFilePath))
+                    using (var reader = new BinaryReader(fs))
+                    {
+                        if (fs.Length >= 5)
+                        {
+                            uint magic = reader.ReadUInt32();
+                            byte version = reader.ReadByte();
+                            
+                            if (magic != MAGIC_NUMBER)
+                            {
+                                Debug.LogError($"Invalid modification log format - wrong magic number");
+                                // Backup corrupted file and start fresh
+                                BackupAndResetLog();
+                                isNewFile = true; // Treat as new after backup
+                            }
+                            else if (version != FORMAT_VERSION)
+                            {
+                                Debug.LogWarning($"Modification log version mismatch: {version} (expected {FORMAT_VERSION})");
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"Failed to validate existing log file: {ex.Message}, will recreate");
+                    isNewFile = true;
+                }
+            }
+            
+            // Now open the file for writing
             logStream = new FileStream(logFilePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
             logWriter = new BinaryWriter(logStream);
+            Debug.Log($"[ChunkModificationLog] Log file opened successfully");
             
             if (isNewFile)
             {
@@ -81,27 +123,6 @@ public class ChunkModificationLog
             }
             else
             {
-                // Validate existing file
-                using (var reader = new BinaryReader(File.OpenRead(logFilePath)))
-                {
-                    if (reader.BaseStream.Length >= 5)
-                    {
-                        uint magic = reader.ReadUInt32();
-                        byte version = reader.ReadByte();
-                        
-                        if (magic != MAGIC_NUMBER)
-                        {
-                            Debug.LogError($"Invalid modification log format - wrong magic number");
-                            // Backup corrupted file and start fresh
-                            BackupAndResetLog();
-                        }
-                        else if (version != FORMAT_VERSION)
-                        {
-                            Debug.LogWarning($"Modification log version mismatch: {version} (expected {FORMAT_VERSION})");
-                        }
-                    }
-                }
-                
                 // Seek to end for appending
                 logStream.Seek(0, SeekOrigin.End);
             }
@@ -109,17 +130,36 @@ public class ChunkModificationLog
         catch (Exception ex)
         {
             Debug.LogError($"Failed to initialize modification log: {ex.Message}");
+            Debug.LogError($"Stack trace: {ex.StackTrace}");
             throw;
         }
     }
 
-    private void LoadExistingModifications()
+    private async Task EnsureModificationsLoadedAsync()
+    {
+        if (loadingTask != null)
+        {
+            await loadingTask;
+        }
+    }
+    
+    private void LoadExistingModificationsAsync()
     {
         if (!File.Exists(logFilePath) || new FileInfo(logFilePath).Length <= 5)
+        {
+            Debug.Log($"[ChunkModificationLog] No existing modifications to load");
             return;
+        }
             
         try
         {
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            Debug.Log($"[ChunkModificationLog] Loading existing modifications from: {logFilePath}");
+            
+            // Read modifications on a background thread
+            var tempModifications = new Dictionary<Vector3Int, List<VoxelModification>>();
+            int count = 0;
+            
             using (var fs = File.OpenRead(logFilePath))
             using (var reader = new BinaryReader(fs))
             {
@@ -132,13 +172,13 @@ public class ChunkModificationLog
                     {
                         var mod = ReadModification(reader);
                         
-                        if (!pendingModifications.ContainsKey(mod.ChunkCoord))
+                        if (!tempModifications.ContainsKey(mod.ChunkCoord))
                         {
-                            pendingModifications[mod.ChunkCoord] = new List<VoxelModification>();
+                            tempModifications[mod.ChunkCoord] = new List<VoxelModification>();
                         }
                         
-                        pendingModifications[mod.ChunkCoord].Add(mod);
-                        modificationCount++;
+                        tempModifications[mod.ChunkCoord].Add(mod);
+                        count++;
                     }
                     catch (EndOfStreamException)
                     {
@@ -153,7 +193,15 @@ public class ChunkModificationLog
                 }
             }
             
-            Debug.Log($"[ChunkModificationLog] Loaded {modificationCount} modifications from log");
+            // Update the shared state with lock
+            lock (writeLock)
+            {
+                pendingModifications = tempModifications;
+                modificationCount = count;
+            }
+            
+            sw.Stop();
+            Debug.Log($"[ChunkModificationLog] Loaded {modificationCount} modifications from log in {sw.ElapsedMilliseconds}ms");
         }
         catch (Exception ex)
         {
@@ -201,9 +249,17 @@ public class ChunkModificationLog
 
     /// <summary>
     /// Gets all pending modifications for a chunk
+    /// Returns empty list if async loading is still in progress (non-blocking)
     /// </summary>
     public List<VoxelModification> GetModifications(Vector3Int chunkCoord)
     {
+        // CRITICAL FIX: Don't block with .Wait() - return empty if not ready
+        if (loadingTask != null && !loadingTask.IsCompleted)
+        {
+            Debug.LogWarning($"[ChunkModificationLog] Modification loading still in progress, returning empty for chunk {chunkCoord}");
+            return new List<VoxelModification>();
+        }
+        
         lock (writeLock)
         {
             if (pendingModifications.TryGetValue(chunkCoord, out var mods))
@@ -216,9 +272,17 @@ public class ChunkModificationLog
 
     /// <summary>
     /// Clears modifications for a chunk after it's been saved
+    /// Does nothing if async loading is still in progress (non-blocking)
     /// </summary>
     public void ClearChunkModifications(Vector3Int chunkCoord)
     {
+        // CRITICAL FIX: Don't block with .Wait() - skip operation if not ready
+        if (loadingTask != null && !loadingTask.IsCompleted)
+        {
+            Debug.LogWarning($"[ChunkModificationLog] Modification loading still in progress, skipping clear for chunk {chunkCoord}");
+            return;
+        }
+        
         lock (writeLock)
         {
             if (pendingModifications.TryGetValue(chunkCoord, out var mods))
@@ -231,9 +295,16 @@ public class ChunkModificationLog
 
     /// <summary>
     /// Checks if a chunk has pending modifications
+    /// Returns false if async loading is still in progress (non-blocking)
     /// </summary>
     public bool HasModifications(Vector3Int chunkCoord)
     {
+        // CRITICAL FIX: Don't block with .Wait() - return false if not ready
+        if (loadingTask != null && !loadingTask.IsCompleted)
+        {
+            return false;
+        }
+        
         lock (writeLock)
         {
             return pendingModifications.ContainsKey(chunkCoord) && 
@@ -250,6 +321,36 @@ public class ChunkModificationLog
         {
             return modificationCount;
         }
+    }
+    
+    /// <summary>
+    /// Checks if the initial loading of modifications is complete
+    /// </summary>
+    public bool IsLoadingComplete()
+    {
+        return loadingTask == null || loadingTask.IsCompleted;
+    }
+    
+    /// <summary>
+    /// Waits for the loading to complete (if still in progress)
+    /// Returns true if loading completed successfully, false if there was an error
+    /// </summary>
+    public bool WaitForLoadingComplete()
+    {
+        if (loadingTask != null && !loadingTask.IsCompleted)
+        {
+            try
+            {
+                loadingTask.Wait();
+                return !loadingTask.IsFaulted;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Error waiting for modification loading: {ex.Message}");
+                return false;
+            }
+        }
+        return true;
     }
 
     private void WriteModification(BinaryWriter writer, VoxelModification mod)

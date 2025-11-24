@@ -287,15 +287,21 @@ public class WorldSaveManager : MonoBehaviour
             return false;
         }
 
-        // Reset caches when changing worlds
-        if (currentWorldId != worldId)
-        {
-            SaveSystem.ResetPathCache();
-        }
+        // Check if we're changing worlds BEFORE updating the fields
+        bool isChangingWorlds = (currentWorldId != worldId);
 
+        // UPDATE FIELDS FIRST before resetting caches
+        // This is critical - SaveSystem.ResetPathCache() needs the NEW path
         currentWorldId = worldId;
         worldSaveFolder = targetFolder;
         worldMetadataPath = Path.Combine(worldSaveFolder, "world.meta");
+
+        // Reset caches when changing worlds (now uses the updated worldSaveFolder)
+        if (isChangingWorlds)
+        {
+            Debug.Log($"[WorldSaveManager] Resetting SaveSystem caches for new world: {worldId}");
+            SaveSystem.ResetPathCache();
+        }
 
         var metadata = LoadWorldMetadata(worldId);
         if (metadata != null)

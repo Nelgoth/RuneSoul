@@ -152,6 +152,11 @@ public class GameUIManager : MonoBehaviour
         if (MultiplayerManager.Instance != null)
         {
             Debug.Log("Subscribing to MultiplayerManager events");
+            // Unsubscribe first to prevent duplicate subscriptions
+            MultiplayerManager.Instance.OnConnectionResult -= HandleConnectionResult;
+            MultiplayerManager.Instance.OnLobbyCreated -= HandleLobbyCreated;
+            MultiplayerManager.Instance.OnLobbyJoined -= HandleLobbyJoined;
+            // Now subscribe
             MultiplayerManager.Instance.OnConnectionResult += HandleConnectionResult;
             MultiplayerManager.Instance.OnLobbyCreated += HandleLobbyCreated;
             MultiplayerManager.Instance.OnLobbyJoined += HandleLobbyJoined;
@@ -311,7 +316,10 @@ public class GameUIManager : MonoBehaviour
                 {
                     Debug.Log("Multiplayer services initialized successfully");
                     
-                    // Connect event handlers
+                    // Connect event handlers (unsubscribe first to prevent duplicates)
+                    MultiplayerManager.Instance.OnConnectionResult -= HandleConnectionResult;
+                    MultiplayerManager.Instance.OnLobbyCreated -= HandleLobbyCreated;
+                    MultiplayerManager.Instance.OnLobbyJoined -= HandleLobbyJoined;
                     MultiplayerManager.Instance.OnConnectionResult += HandleConnectionResult;
                     MultiplayerManager.Instance.OnLobbyCreated += HandleLobbyCreated;
                     MultiplayerManager.Instance.OnLobbyJoined += HandleLobbyJoined;

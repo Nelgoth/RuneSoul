@@ -475,16 +475,33 @@ public class GameManager : MonoBehaviour
         // Wait for the scene to be loaded
         float sceneLoadTimeout = 30f; // 30 seconds timeout
         float sceneLoadTimer = 0f;
+        bool sceneLoaded = false;
         
-        while (SceneManager.GetActiveScene().name != gameplaySceneName && sceneLoadTimer < sceneLoadTimeout)
+        // CRITICAL FIX: Check if scene is loaded (not active) - NetworkManager loads scenes async
+        while (!sceneLoaded && sceneLoadTimer < sceneLoadTimeout)
         {
-            sceneLoadTimer += Time.deltaTime;
-            float progress = 0.7f + (sceneLoadTimer / sceneLoadTimeout * 0.2f);
-            UpdateLoadingProgress(progress, "Finalizing game world...");
-            yield return null;
+            // Check if the gameplay scene exists in loaded scenes
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                Scene scene = SceneManager.GetSceneAt(i);
+                if (scene.name == gameplaySceneName && scene.isLoaded)
+                {
+                    sceneLoaded = true;
+                    Debug.Log($"GameManager: Detected gameplay scene loaded at index {i}");
+                    break;
+                }
+            }
+            
+            if (!sceneLoaded)
+            {
+                sceneLoadTimer += Time.deltaTime;
+                float progress = 0.7f + (sceneLoadTimer / sceneLoadTimeout * 0.2f);
+                UpdateLoadingProgress(progress, "Finalizing game world...");
+                yield return null;
+            }
         }
         
-        if (SceneManager.GetActiveScene().name != gameplaySceneName)
+        if (!sceneLoaded)
         {
             Debug.LogError("GameManager: Gameplay scene failed to load within timeout period");
             ReportConnectionError("Gameplay scene failed to load");
@@ -645,16 +662,33 @@ public class GameManager : MonoBehaviour
         // Wait for the scene to be loaded
         float sceneLoadTimeout = 30f; // 30 seconds timeout
         float sceneLoadTimer = 0f;
+        bool sceneLoaded = false;
         
-        while (SceneManager.GetActiveScene().name != gameplaySceneName && sceneLoadTimer < sceneLoadTimeout)
+        // CRITICAL FIX: Check if scene is loaded (not active) - NetworkManager loads scenes async
+        while (!sceneLoaded && sceneLoadTimer < sceneLoadTimeout)
         {
-            sceneLoadTimer += Time.deltaTime;
-            float progress = 0.7f + (sceneLoadTimer / sceneLoadTimeout * 0.2f);
-            UpdateLoadingProgress(progress, "Finalizing game world...");
-            yield return null;
+            // Check if the gameplay scene exists in loaded scenes
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                Scene scene = SceneManager.GetSceneAt(i);
+                if (scene.name == gameplaySceneName && scene.isLoaded)
+                {
+                    sceneLoaded = true;
+                    Debug.Log($"GameManager: Detected gameplay scene loaded at index {i}");
+                    break;
+                }
+            }
+            
+            if (!sceneLoaded)
+            {
+                sceneLoadTimer += Time.deltaTime;
+                float progress = 0.7f + (sceneLoadTimer / sceneLoadTimeout * 0.2f);
+                UpdateLoadingProgress(progress, "Finalizing game world...");
+                yield return null;
+            }
         }
         
-        if (SceneManager.GetActiveScene().name != gameplaySceneName)
+        if (!sceneLoaded)
         {
             Debug.LogError("GameManager: Gameplay scene failed to load within timeout period");
             ReportConnectionError("Gameplay scene failed to load");
