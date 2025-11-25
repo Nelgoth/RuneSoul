@@ -4872,9 +4872,9 @@ public class World : MonoBehaviour
                             neighborBatch.Add(neighborChunk);
                             processedThisPass.Add(neighborChunk);
                         }
-                    }
-                }
-            }
+                    }  // end dz loop
+                }  // end dy loop
+            }  // end dx loop
             
             batches.Add(neighborBatch);
         }
@@ -6204,5 +6204,4 @@ public class World : MonoBehaviour
         
         TerrainAnalysisCache.OnApplicationQuit();
     }
-}
 }
