@@ -32,6 +32,11 @@ public class PlayerFallRecovery : NetworkBehaviour
     private Coroutine gravityRestoreCoroutine;
     private bool isFalling = false;
     private bool isInitialized = false;
+    
+    // Velocity-based fall detection
+    private Vector3 lastPosition;
+    private float continuousFallTime = 0f;
+    private float maxContinuousFallTime = 3f; // Trigger rescue after 3 seconds of falling
 
     private void Awake()
     {
@@ -155,6 +160,7 @@ public class PlayerFallRecovery : NetworkBehaviour
     {
         // Initial delay to let world initialize
         yield return new WaitForSeconds(1f);
+        lastPosition = transform.position;
         
         while (true)
         {
@@ -163,33 +169,63 @@ public class PlayerFallRecovery : NetworkBehaviour
             // Skip if we're not fully initialized
             if (!isInitialized) continue;
             
-            // Record valid positions when player is on solid ground
-            if (IsPositionValid(transform.position) && transform.position.y > minAcceptableHeight)
+            Vector3 currentPosition = transform.position;
+            float verticalVelocity = (currentPosition.y - lastPosition.y) / checkInterval;
+            
+            // Check if player is falling (moving downward quickly)
+            bool isFallingNow = verticalVelocity < -2f; // Falling faster than 2 units/second
+            
+            if (isFallingNow)
             {
-                validPositionHistory.Add(transform.position);
-                isFalling = false;
+                continuousFallTime += checkInterval;
+            }
+            else
+            {
+                continuousFallTime = 0f; // Reset if not falling
             }
             
-            // Check if we've fallen below the acceptable limit
-            if (transform.position.y < minAcceptableHeight && !isFalling)
+            // Record valid positions when player is on solid ground
+            if (IsPositionValid(currentPosition) && currentPosition.y > minAcceptableHeight)
             {
-                isFalling = true;
-                
-                // Check cooldown to prevent rapid rescues
-                if (Time.time - lastRescueTime > rescueCooldownTime && rescueAttempts < maxSelfRescueAttempts)
-                {
-                    RequestRescueServerRpc();
-                    lastRescueTime = Time.time;
-                    rescueAttempts++;
-                }
-                else if (rescueAttempts >= maxSelfRescueAttempts)
-                {
-                    // If we've tried too many self-rescues, ask the server for help
-                    RequestServerRescueServerRpc();
-                    lastRescueTime = Time.time;
-                    rescueAttempts = 0; // Reset counter after server rescue
-                }
+                validPositionHistory.Add(currentPosition);
+                isFalling = false;
+                continuousFallTime = 0f; // Reset fall time when on solid ground
             }
+            
+            // TRIGGER 1: Fallen below acceptable height (void/out of world)
+            if (currentPosition.y < minAcceptableHeight && !isFalling)
+            {
+                Debug.LogWarning($"[PlayerFallRecovery] Player below min height {currentPosition.y} < {minAcceptableHeight}");
+                isFalling = true;
+                TriggerRescue();
+            }
+            // TRIGGER 2: Falling continuously for too long (stuck in hole/crack)
+            else if (continuousFallTime >= maxContinuousFallTime && !isFalling)
+            {
+                Debug.LogWarning($"[PlayerFallRecovery] Player falling continuously for {continuousFallTime}s at Y={currentPosition.y}");
+                isFalling = true;
+                TriggerRescue();
+            }
+            
+            lastPosition = currentPosition;
+        }
+    }
+    
+    private void TriggerRescue()
+    {
+        // Check cooldown to prevent rapid rescues
+        if (Time.time - lastRescueTime > rescueCooldownTime && rescueAttempts < maxSelfRescueAttempts)
+        {
+            RequestRescueServerRpc();
+            lastRescueTime = Time.time;
+            rescueAttempts++;
+        }
+        else if (rescueAttempts >= maxSelfRescueAttempts)
+        {
+            // If we've tried too many self-rescues, ask the server for help
+            RequestServerRescueServerRpc();
+            lastRescueTime = Time.time;
+            rescueAttempts = 0; // Reset counter after server rescue
         }
     }
     
@@ -382,6 +418,8 @@ public class PlayerFallRecovery : NetworkBehaviour
             
             // Clear the falling state
             isFalling = false;
+            continuousFallTime = 0f;
+            lastPosition = rescuePosition;
         }
     }
     

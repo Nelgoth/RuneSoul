@@ -4899,23 +4899,8 @@ public class World : MonoBehaviour
                     updatesThisFrame++;
                 }
             }
-            else
-            {
-                // Batch doesn't fit - but if it's the ONLY batch, process what we can
-                // to avoid starvation (better partial update than no update)
-                if (batches.Count == 1 || updatesThisFrame == 0)
-                {
-                    int toProcess = Mathf.Min(batch.Count, remainingBudget);
-                    for (int i = 0; i < toProcess; i++)
-                    {
-                        batch[i].Generate(log: false, fullMesh: true, quickCheck: false);
-                        batch[i].isMeshUpdateQueued = false;
-                        processedChunks.Add(batch[i]);
-                        updatesThisFrame++;
-                    }
-                }
-                // Otherwise skip this batch for next frame (prioritize smaller complete batches)
-            }
+            // else: Batch doesn't fit - skip entirely to avoid partial updates that create large cracks
+            // Wait for next frame when budget will accommodate the full batch
             
             if (updatesThisFrame >= maxUpdatesPerFrame) break;
         }
