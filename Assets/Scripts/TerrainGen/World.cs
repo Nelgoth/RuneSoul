@@ -4833,16 +4833,17 @@ public class World : MonoBehaviour
         int updatesThisFrame = 0;
         var processedChunks = new List<Chunk>();
 
-        // CRITICAL FIX: Group neighbor chunks together to prevent temporary cracks
-        // When mining affects multiple chunks, they need to update in the same frame
-        // to avoid visual gaps at boundaries between updates
+        // CRITICAL FIX: Smart batch processing to eliminate cracks while maintaining throughput
+        // Strategy: Process as many complete neighbor groups as possible, prioritizing smaller batches
         var chunksToProcess = new List<Chunk>(chunksNeedingMeshUpdate);
         var processedThisPass = new HashSet<Chunk>();
-
+        
+        // Group chunks into neighbor batches and sort by size (smallest first)
+        var batches = new List<List<Chunk>>();
+        
         foreach (var chunk in chunksToProcess)
         {
             if (processedThisPass.Contains(chunk)) continue;
-            if (updatesThisFrame >= maxUpdatesPerFrame) break;
 
             Vector3Int chunkCoord = Coord.WorldToChunkCoord(chunk.transform.position, chunkSize, voxelSize);
             if (!chunk.gameObject.activeInHierarchy || chunk.generationCoroutine != null)
@@ -4850,6 +4851,7 @@ public class World : MonoBehaviour
 
             // Find immediate neighbors also queued for update
             List<Chunk> neighborBatch = new List<Chunk> { chunk };
+            processedThisPass.Add(chunk);
             
             // Check all 26 neighbors (including diagonals) for queued updates
             for (int dx = -1; dx <= 1; dx++)
@@ -4868,35 +4870,54 @@ public class World : MonoBehaviour
                             neighborChunk.generationCoroutine == null)
                         {
                             neighborBatch.Add(neighborChunk);
+                            processedThisPass.Add(neighborChunk);
                         }
                     }
                 }
             }
-
-            // Process this chunk and its neighbors together
-            // CRITICAL FIX: Use "all-or-nothing" approach to prevent partial batch updates
-            // If we can't fit the entire neighbor batch in this frame, skip it entirely
-            // and let it process next frame when the full batch can update together
+            
+            batches.Add(neighborBatch);
+        }
+        
+        // Sort batches by size (smallest first) to maximize throughput
+        batches.Sort((a, b) => a.Count.CompareTo(b.Count));
+        
+        // Process batches in order of size
+        foreach (var batch in batches)
+        {
             int remainingBudget = maxUpdatesPerFrame - updatesThisFrame;
             
-            if (neighborBatch.Count <= remainingBudget)
+            // If entire batch fits, process it
+            if (batch.Count <= remainingBudget)
             {
-                // We can process the entire batch - do it!
-                for (int i = 0; i < neighborBatch.Count; i++)
+                foreach (var batchChunk in batch)
                 {
-                    Chunk batchChunk = neighborBatch[i];
-                    
                     // CRITICAL FIX: Pass fullMesh=true to ensure the mesh actually regenerates from density data
-                    // When fullMesh=false and density data exists (e.g., from QuickCheck initialization),
-                    // Chunk.Generate applies an EMPTY mesh (0 vertices), leaving a hole in the terrain.
                     batchChunk.Generate(log: false, fullMesh: true, quickCheck: false);
                     batchChunk.isMeshUpdateQueued = false;
                     processedChunks.Add(batchChunk);
-                    processedThisPass.Add(batchChunk);
                     updatesThisFrame++;
                 }
             }
-            // else: Batch too large for remaining budget, skip entirely and process next frame
+            else
+            {
+                // Batch doesn't fit - but if it's the ONLY batch, process what we can
+                // to avoid starvation (better partial update than no update)
+                if (batches.Count == 1 || updatesThisFrame == 0)
+                {
+                    int toProcess = Mathf.Min(batch.Count, remainingBudget);
+                    for (int i = 0; i < toProcess; i++)
+                    {
+                        batch[i].Generate(log: false, fullMesh: true, quickCheck: false);
+                        batch[i].isMeshUpdateQueued = false;
+                        processedChunks.Add(batch[i]);
+                        updatesThisFrame++;
+                    }
+                }
+                // Otherwise skip this batch for next frame (prioritize smaller complete batches)
+            }
+            
+            if (updatesThisFrame >= maxUpdatesPerFrame) break;
         }
 
         // Remove processed chunks
@@ -6183,4 +6204,5 @@ public class World : MonoBehaviour
         
         TerrainAnalysisCache.OnApplicationQuit();
     }
+}
 }
