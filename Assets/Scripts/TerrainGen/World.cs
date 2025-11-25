@@ -4833,21 +4833,63 @@ public class World : MonoBehaviour
         int updatesThisFrame = 0;
         var processedChunks = new List<Chunk>();
 
-        foreach (var chunk in chunksNeedingMeshUpdate)
+        // CRITICAL FIX: Group neighbor chunks together to prevent temporary cracks
+        // When mining affects multiple chunks, they need to update in the same frame
+        // to avoid visual gaps at boundaries between updates
+        var chunksToProcess = new List<Chunk>(chunksNeedingMeshUpdate);
+        var processedThisPass = new HashSet<Chunk>();
+
+        foreach (var chunk in chunksToProcess)
         {
+            if (processedThisPass.Contains(chunk)) continue;
             if (updatesThisFrame >= maxUpdatesPerFrame) break;
 
             Vector3Int chunkCoord = Coord.WorldToChunkCoord(chunk.transform.position, chunkSize, voxelSize);
             if (!chunk.gameObject.activeInHierarchy || chunk.generationCoroutine != null)
                 continue;
 
-            // CRITICAL FIX: Pass fullMesh=true to ensure the mesh actually regenerates from density data
-            // When fullMesh=false and density data exists (e.g., from QuickCheck initialization),
-            // Chunk.Generate applies an EMPTY mesh (0 vertices), leaving a hole in the terrain.
-            chunk.Generate(log: false, fullMesh: true, quickCheck: false);
-            chunk.isMeshUpdateQueued = false;
-            processedChunks.Add(chunk);
-            updatesThisFrame++;
+            // Find immediate neighbors also queued for update
+            List<Chunk> neighborBatch = new List<Chunk> { chunk };
+            
+            // Check all 26 neighbors (including diagonals) for queued updates
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    for (int dz = -1; dz <= 1; dz++)
+                    {
+                        if (dx == 0 && dy == 0 && dz == 0) continue;
+                        
+                        Vector3Int neighborCoord = chunkCoord + new Vector3Int(dx, dy, dz);
+                        if (chunks.TryGetValue(neighborCoord, out Chunk neighborChunk) && 
+                            chunksNeedingMeshUpdate.Contains(neighborChunk) && 
+                            !processedThisPass.Contains(neighborChunk) &&
+                            neighborChunk.gameObject.activeInHierarchy &&
+                            neighborChunk.generationCoroutine == null)
+                        {
+                            neighborBatch.Add(neighborChunk);
+                        }
+                    }
+                }
+            }
+
+            // Process this chunk and its neighbors together (up to maxUpdatesPerFrame)
+            int remainingBudget = maxUpdatesPerFrame - updatesThisFrame;
+            int batchCount = Mathf.Min(neighborBatch.Count, remainingBudget);
+            
+            for (int i = 0; i < batchCount; i++)
+            {
+                Chunk batchChunk = neighborBatch[i];
+                
+                // CRITICAL FIX: Pass fullMesh=true to ensure the mesh actually regenerates from density data
+                // When fullMesh=false and density data exists (e.g., from QuickCheck initialization),
+                // Chunk.Generate applies an EMPTY mesh (0 vertices), leaving a hole in the terrain.
+                batchChunk.Generate(log: false, fullMesh: true, quickCheck: false);
+                batchChunk.isMeshUpdateQueued = false;
+                processedChunks.Add(batchChunk);
+                processedThisPass.Add(batchChunk);
+                updatesThisFrame++;
+            }
         }
 
         // Remove processed chunks
