@@ -4804,6 +4804,17 @@ public class World : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Queue a chunk for mesh regeneration using the coordinated update system
+    /// </summary>
+    public void QueueChunkForMeshUpdate(Chunk chunk)
+    {
+        if (chunk != null && chunksNeedingMeshUpdate != null)
+        {
+            chunksNeedingMeshUpdate.Add(chunk);
+        }
+    }
+
     private void ProcessMeshUpdates()
     {
         if (chunksNeedingMeshUpdate == null || chunksNeedingMeshUpdate.Count == 0) return;

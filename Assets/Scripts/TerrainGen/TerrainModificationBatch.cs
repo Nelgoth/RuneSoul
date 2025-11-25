@@ -345,7 +345,7 @@ public class TerrainModificationBatch : IDisposable
     }
 
     /// <summary>
-    /// Regenerate meshes for all affected chunks that are loaded
+    /// Queue mesh regeneration for all affected chunks that are loaded
     /// </summary>
     private void RegenerateMeshesForAffectedChunks()
     {
@@ -357,7 +357,14 @@ public class TerrainModificationBatch : IDisposable
                 if (state.Status == ChunkConfigurations.ChunkStatus.Loaded || 
                     state.Status == ChunkConfigurations.ChunkStatus.Modified)
                 {
-                    chunk.Generate(log: false, fullMesh: false, quickCheck: false);
+                    // CRITICAL FIX: Use the mesh update queue instead of calling Generate() directly
+                    // Direct Generate() calls are asynchronous and don't coordinate with neighbors,
+                    // causing visual cracks at chunk boundaries when multiple chunks update simultaneously
+                    if (!chunk.isMeshUpdateQueued)
+                    {
+                        chunk.isMeshUpdateQueued = true;
+                        world.QueueChunkForMeshUpdate(chunk);
+                    }
                 }
             }
         }
