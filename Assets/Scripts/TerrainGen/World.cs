@@ -4873,23 +4873,30 @@ public class World : MonoBehaviour
                 }
             }
 
-            // Process this chunk and its neighbors together (up to maxUpdatesPerFrame)
+            // Process this chunk and its neighbors together
+            // CRITICAL FIX: Use "all-or-nothing" approach to prevent partial batch updates
+            // If we can't fit the entire neighbor batch in this frame, skip it entirely
+            // and let it process next frame when the full batch can update together
             int remainingBudget = maxUpdatesPerFrame - updatesThisFrame;
-            int batchCount = Mathf.Min(neighborBatch.Count, remainingBudget);
             
-            for (int i = 0; i < batchCount; i++)
+            if (neighborBatch.Count <= remainingBudget)
             {
-                Chunk batchChunk = neighborBatch[i];
-                
-                // CRITICAL FIX: Pass fullMesh=true to ensure the mesh actually regenerates from density data
-                // When fullMesh=false and density data exists (e.g., from QuickCheck initialization),
-                // Chunk.Generate applies an EMPTY mesh (0 vertices), leaving a hole in the terrain.
-                batchChunk.Generate(log: false, fullMesh: true, quickCheck: false);
-                batchChunk.isMeshUpdateQueued = false;
-                processedChunks.Add(batchChunk);
-                processedThisPass.Add(batchChunk);
-                updatesThisFrame++;
+                // We can process the entire batch - do it!
+                for (int i = 0; i < neighborBatch.Count; i++)
+                {
+                    Chunk batchChunk = neighborBatch[i];
+                    
+                    // CRITICAL FIX: Pass fullMesh=true to ensure the mesh actually regenerates from density data
+                    // When fullMesh=false and density data exists (e.g., from QuickCheck initialization),
+                    // Chunk.Generate applies an EMPTY mesh (0 vertices), leaving a hole in the terrain.
+                    batchChunk.Generate(log: false, fullMesh: true, quickCheck: false);
+                    batchChunk.isMeshUpdateQueued = false;
+                    processedChunks.Add(batchChunk);
+                    processedThisPass.Add(batchChunk);
+                    updatesThisFrame++;
+                }
             }
+            // else: Batch too large for remaining budget, skip entirely and process next frame
         }
 
         // Remove processed chunks
