@@ -34,6 +34,10 @@ public class NetworkPlayer : NetworkBehaviour
     private Quaternion targetRotation;
     private float movementSmoothTime = 0.1f;
     private Vector3 positionVelocity;
+    
+    // Flag to prevent position updates until PlayerSpawner has positioned the player
+    private bool isPositioned = false;
+    private float spawnTime = 0f;
 
     private void Awake()
     {
@@ -46,32 +50,26 @@ public class NetworkPlayer : NetworkBehaviour
     {
         base.OnNetworkSpawn();
         
-        Debug.Log($"Player {OwnerClientId} network object spawned as {(IsOwner ? "owner" : "non-owner")}");
+        spawnTime = Time.time; // Record spawn time for fallback
         
-        // Setup per owner
+        Debug.Log($"[NetworkPlayer] Player {OwnerClientId} spawned as {(IsOwner ? "owner" : "non-owner")}");
+        
+        // MODIFIED: All spawn logic now handled by UnifiedSpawnController
+        // Keep everything DISABLED until UnifiedSpawnController activates us
+        
         if (IsOwner)
         {
-            Debug.Log($"Player {OwnerClientId} network object spawned as owner");
+            Debug.Log($"[NetworkPlayer] Owner player {OwnerClientId} spawned - waiting for UnifiedSpawnController");
             
-            // Enable input control for the owner
+            // Keep controller DISABLED - UnifiedSpawnController will enable it
             if (controller != null)
-                controller.enabled = true;
+                controller.enabled = false;
                 
-            // Only the server should set network variables
-            if (IsServer)
-            {
-                networkPosition.Value = transform.position;
-                networkRotation.Value = transform.rotation;
-            }
-            else
-            {
-                // Client owner should send initial position to server
-                UpdatePositionServerRpc(transform.position, transform.rotation);
-            }
+            // DON'T set networkPosition here - UnifiedSpawnController will set it authoritatively
         }
         else
         {
-            Debug.Log($"Player {OwnerClientId} network object spawned as non-owner");
+            Debug.Log($"[NetworkPlayer] Non-owner player {OwnerClientId} spawned");
             
             // Disable input control for non-owners
             if (controller != null)
@@ -90,14 +88,41 @@ public class NetworkPlayer : NetworkBehaviour
     {
         if (IsOwner)
         {
-            // Send position to server using ServerRpc
-            UpdatePositionServerRpc(transform.position, transform.rotation);
+            // Only send position updates after PlayerSpawner has positioned us
+            // This prevents fighting with the initial spawn/teleport
+            // Fallback: After 5 seconds, enable updates anyway (in case PlayerSpawner fails)
+            if (isPositioned || (Time.time - spawnTime > 5f))
+            {
+                // Send position to server using ServerRpc
+                UpdatePositionServerRpc(transform.position, transform.rotation);
+            }
         }
         else
         {
             // Non-owners update position from network
             SmoothlyUpdateTransform();
         }
+    }
+
+    /// <summary>
+    /// Server-only method to set network position authoritatively (used by PlayerSpawner)
+    /// </summary>
+    public void SetNetworkPositionAuthority(Vector3 position, Quaternion rotation)
+    {
+        if (!IsServer)
+        {
+            Debug.LogWarning($"SetNetworkPositionAuthority called on non-server for player {OwnerClientId}");
+            return;
+        }
+        
+        // Set the NetworkVariables directly (no distance check for teleports)
+        networkPosition.Value = position;
+        networkRotation.Value = rotation;
+        
+        // Mark as positioned so Update() can start sending position updates
+        isPositioned = true;
+        
+        Debug.Log($"[NetworkPlayer-{OwnerClientId}] Network position set authoritatively to {position}, marked as positioned");
     }
 
     [ServerRpc]

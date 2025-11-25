@@ -1045,7 +1045,6 @@ GameObject:
   - component: {fileID: -5950617731011335431}
   - component: {fileID: 1468259014831797329}
   - component: {fileID: -8360893109036948669}
-  - component: {fileID: -6388067265395885159}
   - component: {fileID: 4601912459196018334}
   - component: {fileID: 5802709917617281051}
   - component: {fileID: 2752306995913926318}
@@ -1087,7 +1086,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 2172753959
+  GlobalObjectIdHash: 712992325
   InScenePlacedSourceGlobalObjectIdHash: 0
   DeferredDespawnTick: 0
   Ownership: 1
@@ -1395,10 +1394,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
   enableDebugLogs: 1
-  initializationTimeout: 10
-  waitForCameraSetupTime: 2
-  enableSpawnSafety: 1
-  gravityEnableDelay: 2
 --- !u!114 &-630767611121228316
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1414,7 +1409,6 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   controller: {fileID: 4416926081852918490}
   visualsContainer: {fileID: 0}
-  networkSendRate: 30
 --- !u!114 &-5950617731011335431
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1468,36 +1462,7 @@ MonoBehaviour:
   cameraHeight: 1.6
   cameraPriority: 100
   cameraTag: PlayerCamera
-  cameraLookupTimeout: 3
-  cameraRetryDelay: 0.1
   enableDebugLogs: 1
---- !u!114 &-6388067265395885159
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4416926081852918481}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: cf80a64c02788934493654d58d29520e, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  ShowTopMostFoldoutHeaderGroup: 1
-  maxTerrainWaitTime: 10
-  groundCheckInterval: 0.5
-  minHeightAboveGround: 2
-  maxGroundCheckDistance: 150
-  terrainLayer:
-    serializedVersion: 2
-    m_Bits: 72
-  debugMode: 0
-  cameraSetupWaitTime: 2
-  maxControlDisableTime: 15
-  hoverHeight: 30
-  allowHoverMovement: 0
-  forceLoadDistance: 2
-  disableQuickCheck: 1
 --- !u!114 &4601912459196018334
 MonoBehaviour:
   m_ObjectHideFlags: 0

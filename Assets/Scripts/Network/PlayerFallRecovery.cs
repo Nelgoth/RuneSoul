@@ -83,8 +83,22 @@ public class PlayerFallRecovery : NetworkBehaviour
         // Skip for non-owners
         if (!IsOwner) return;
         
-        // Additional initialization for network spawn
-        StartCheckCoroutine();
+        // MODIFIED: Disabled during spawn - UnifiedSpawnController will enable us in Phase 6
+        enabled = false;
+        
+        Debug.Log($"[PlayerFallRecovery] Initialized but DISABLED for player {OwnerClientId} - waiting for UnifiedSpawnController");
+        
+        // DON'T start check coroutine yet - will be started when enabled
+    }
+
+    private void OnEnable()
+    {
+        // When enabled (by UnifiedSpawnController), start the check coroutine
+        if (IsOwner && isInitialized)
+        {
+            Debug.Log($"[PlayerFallRecovery] Enabled for player {OwnerClientId}, starting fall detection");
+            StartCheckCoroutine();
+        }
     }
 
     public override void OnNetworkDespawn()
@@ -239,23 +253,18 @@ public class PlayerFallRecovery : NetworkBehaviour
         // Find a completely fresh spawn position
         Vector3 rescuePosition;
         
-        if (PlayerSpawner.Instance != null)
+        // Try to find ground at current XZ coordinates
+        rescuePosition = new Vector3(transform.position.x, 100f, transform.position.z);
+        
+        // Try to find ground below this position
+        if (Physics.Raycast(rescuePosition, Vector3.down, out RaycastHit hit, 150f, terrainMask))
         {
-            // Request a completely new spawn position
-            rescuePosition = PlayerSpawner.Instance.GetSpawnPosition(clientId);
-            Debug.Log($"Using PlayerSpawner to get fresh spawn position: {rescuePosition}");
+            rescuePosition = hit.point + (Vector3.up * upwardOffset);
+            Debug.Log($"Found ground for rescue at: {rescuePosition}");
         }
         else
         {
-            // Fallback: Find a high position above current XZ
-            rescuePosition = new Vector3(transform.position.x, 100f, transform.position.z);
-            
-            // Try to find ground below this position
-            if (Physics.Raycast(rescuePosition, Vector3.down, out RaycastHit hit, 150f, terrainMask))
-            {
-                rescuePosition = hit.point + (Vector3.up * upwardOffset);
-            }
-            Debug.Log($"Using fallback high position for rescue: {rescuePosition}");
+            Debug.LogWarning($"No ground found for rescue, using high position: {rescuePosition}");
         }
         
         // Perform the rescue
@@ -444,8 +453,14 @@ public class PlayerFallRecovery : NetworkBehaviour
         
         if (World.Instance != null)
         {
-            // Force update player position in World to trigger chunk loading
-            World.Instance.UpdatePlayerPosition(position);
+            // CRITICAL: Register player position with World FIRST
+            // This adds player to playerChunkCoordinates and protects chunks from unloading
+            World.Instance.UpdatePlayerPositionForClient(networkObject.OwnerClientId, position);
+            
+            // Force recalculation of active chunks to protect rescue area
+            World.Instance.RecalculateActiveChunks();
+            
+            Debug.Log($"[PlayerFallRecovery] Registered player {networkObject.OwnerClientId} with World at {position}");
             
             // Get the player's current chunk coordinates
             Vector3Int chunkCoord = Coord.WorldToChunkCoord(
@@ -465,13 +480,13 @@ public class PlayerFallRecovery : NetworkBehaviour
                     
                     // Immediate chunk loading, disable quick check to ensure proper terrain generation
                     ChunkOperationsQueue.Instance.QueueChunkForLoad(neighborCoord, true, false);
-                    Debug.Log($"Forcing load of chunk {neighborCoord} for player rescue");
+                    Debug.Log($"[PlayerFallRecovery] Forcing load of chunk {neighborCoord} for rescue");
                 }
             }
         }
         else
         {
-            Debug.LogWarning("World.Instance not available for forced chunk loading during rescue");
+            Debug.LogWarning("[PlayerFallRecovery] World.Instance not available for forced chunk loading during rescue");
         }
     }
     

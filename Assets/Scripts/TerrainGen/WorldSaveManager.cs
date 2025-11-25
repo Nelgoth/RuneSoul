@@ -426,6 +426,24 @@ public class WorldSaveManager : MonoBehaviour
                 currentWorldMetadata = metadata;
             }
 
+            // Save all player positions if we're on the server
+            if (Unity.Netcode.NetworkManager.Singleton != null && 
+                Unity.Netcode.NetworkManager.Singleton.IsServer &&
+                PlayerSpawner.Instance != null)
+            {
+                // Get all spawned player objects
+                foreach (var netObj in Unity.Netcode.NetworkManager.Singleton.SpawnManager.SpawnedObjects.Values)
+                {
+                    if (netObj.IsPlayerObject)
+                    {
+                        ulong clientId = netObj.OwnerClientId;
+                        Vector3 position = netObj.transform.position;
+                        PlayerSpawner.Instance.SavePlayerPosition(clientId, position);
+                        Debug.Log($"[WorldSaveManager] Saved position for player {clientId} during world save");
+                    }
+                }
+            }
+
             // Force save terrain analysis cache
             TerrainAnalysisCache.Update();
 
@@ -490,30 +508,45 @@ public class WorldSaveManager : MonoBehaviour
 
     public PlayerSaveData LoadPlayerData(ulong clientId)
     {
+        Debug.Log($"[WorldSaveManager] LoadPlayerData called for client {clientId}");
+        
         if (!isInitialized)
         {
-            Debug.LogError("[WorldSaveManager] Cannot load player data - not initialized");
+            Debug.LogError($"[WorldSaveManager] Cannot load player data - not initialized! worldSaveFolder={worldSaveFolder}");
             return null;
         }
 
         try
         {
             string playerDataPath = Path.Combine(worldSaveFolder, "Players", $"player_{clientId}.json");
+            Debug.Log($"[WorldSaveManager] Looking for player data at: {playerDataPath}");
+            
             if (!File.Exists(playerDataPath))
             {
-                Debug.Log($"[WorldSaveManager] No saved data found for player {clientId}");
+                Debug.LogWarning($"[WorldSaveManager] ❌ No saved data file found for player {clientId} at {playerDataPath}");
                 return null;
             }
 
             string json = File.ReadAllText(playerDataPath);
+            Debug.Log($"[WorldSaveManager] Read JSON data: {json}");
+            
             var playerData = JsonUtility.FromJson<PlayerSaveData>(json);
 
-            Debug.Log($"[WorldSaveManager] Loaded data for player {clientId} from {playerDataPath}");
+            if (playerData != null)
+            {
+                Vector3 loadedPosition = playerData.Position;
+                Debug.Log($"[WorldSaveManager] ✅ Successfully loaded data for player {clientId}. Position: {loadedPosition}");
+            }
+            else
+            {
+                Debug.LogError($"[WorldSaveManager] Failed to deserialize player data from JSON");
+            }
+
             return playerData;
         }
         catch (Exception e)
         {
-            Debug.LogError($"[WorldSaveManager] Failed to load player data: {e.Message}");
+            Debug.LogError($"[WorldSaveManager] Failed to load player data: {e.Message}\n{e.StackTrace}");
             return null;
         }
     }

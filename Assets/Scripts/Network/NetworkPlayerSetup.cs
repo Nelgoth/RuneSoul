@@ -12,18 +12,20 @@ public class NetworkPlayerSetup : NetworkBehaviour
 {
     [Header("Component Setup")]
     [SerializeField] private bool enableDebugLogs = true;
-    [SerializeField] private float initializationTimeout = 10f;
-    [SerializeField] private float waitForCameraSetupTime = 2f;
-    
-    [Header("Player Safety")]
-    [SerializeField] private bool enableSpawnSafety = true;
-    [SerializeField] private float gravityEnableDelay = 2f;
+    // REMOVED: Unused fields with UnifiedSpawnController
+    // [SerializeField] private float initializationTimeout = 10f;
+    // [SerializeField] private float waitForCameraSetupTime = 2f;
+    // 
+    // [Header("Player Safety")]
+    // [SerializeField] private bool enableSpawnSafety = true;
+    // [SerializeField] private float gravityEnableDelay = 2f;
     
     // References to player components that need ownership-based setup
     private PlayerInput playerInput;
     private ThirdPersonController playerController;
     private NetworkPlayerCameraController cameraController;
-    private PlayerSpawnSafety spawnSafety;
+    // REMOVED: PlayerSpawnSafety (deleted - functionality moved to UnifiedSpawnController)
+    // private PlayerSpawnSafety spawnSafety;
     private PlayerFallRecovery fallRecovery;
     
     // Internal state tracking
@@ -45,11 +47,13 @@ public class NetworkPlayerSetup : NetworkBehaviour
         // Find all required components
         FindRequiredComponents();
         
-        // Handle setup differently based on ownership
+        // MODIFIED: Local player setup now handled by UnifiedSpawnController
+        // This class only handles remote player setup
         if (IsOwner)
         {
-            // Start asynchronous setup for local player
-            setupCoroutine = StartCoroutine(SetupLocalPlayerAsync());
+            DebugLog($"Local player {OwnerClientId} - UnifiedSpawnController will handle setup");
+            // UnifiedSpawnController handles all local player setup
+            // Do nothing here for local players
         }
         else
         {
@@ -78,75 +82,12 @@ public class NetworkPlayerSetup : NetworkBehaviour
         
         // Find specialized network components
         cameraController = GetComponent<NetworkPlayerCameraController>();
-        spawnSafety = GetComponent<PlayerSpawnSafety>();
+        // REMOVED: PlayerSpawnSafety (deleted - functionality moved to UnifiedSpawnController)
+        // spawnSafety = GetComponent<PlayerSpawnSafety>();
         fallRecovery = GetComponent<PlayerFallRecovery>();
     }
 
-    private IEnumerator SetupLocalPlayerAsync()
-    {
-        // Initially disable control to prevent falling through terrain
-        DisableLocalPlayerControl();
-        
-        // First, wait for camera setup to complete if we have a camera controller
-        if (cameraController != null)
-        {
-            float timeWaited = 0f;
-            DebugLog("Waiting for camera setup to complete...");
-            
-            while (!cameraController.IsSetupComplete() && timeWaited < waitForCameraSetupTime)
-            {
-                yield return null;
-                timeWaited += Time.deltaTime;
-            }
-            
-            isCameraSetupComplete = cameraController.IsSetupComplete();
-            DebugLog($"Camera setup completed: {isCameraSetupComplete}, waited {timeWaited:F2}s");
-        }
-        else
-        {
-            DebugLog("No camera controller found, skipping camera wait");
-            isCameraSetupComplete = true;
-        }
-        
-        // Next, if spawn safety is enabled, wait for it to complete
-        if (enableSpawnSafety && spawnSafety != null)
-        {
-            DebugLog("Using spawn safety for player positioning");
-            
-            // Wait for spawn safety to complete
-            float timeWaited = 0f;
-            while (!spawnSafety.IsInitializationComplete() && timeWaited < initializationTimeout)
-            {
-                yield return null;
-                timeWaited += Time.deltaTime;
-            }
-            
-            if (spawnSafety.IsInitializationComplete())
-            {
-                DebugLog($"Spawn safety completed after {timeWaited:F2}s");
-            }
-            else
-            {
-                DebugLog($"Spawn safety timed out after {timeWaited:F2}s, continuing anyway");
-            }
-        }
-        else
-        {
-            // If not using spawn safety, add a small delay to allow terrain to load
-            DebugLog("No spawn safety component, adding safety delay before enabling control");
-            yield return new WaitForSeconds(gravityEnableDelay);
-        }
-        
-        // Now we can safely enable local player controls
-        EnableLocalPlayerComponents();
-        
-        // Register with player spawner
-        RegisterWithPlayerSpawner();
-        
-        // Track state
-        isInitialized = true;
-        DebugLog("Player initialization complete - full control enabled");
-    }
+    // REMOVED: SetupLocalPlayerAsync - now handled by UnifiedSpawnController
 
     private void DisableLocalPlayerControl()
     {
@@ -231,12 +172,8 @@ public class NetworkPlayerSetup : NetworkBehaviour
             DebugLog("Disabled NetworkPlayerCameraController for non-owner");
         }
         
-        // Disable other owner-only components
-        if (TryGetComponent<PlayerSpawnSafety>(out var safety))
-        {
-            safety.enabled = false;
-            DebugLog("Disabled PlayerSpawnSafety for non-owner");
-        }
+        // REMOVED: PlayerSpawnSafety disable logic (component deleted)
+        // PlayerSpawnSafety functionality has been moved to UnifiedSpawnController
     }
     
     private void RegisterWithPlayerSpawner()

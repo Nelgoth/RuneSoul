@@ -28,6 +28,10 @@ public class GameUIManager : MonoBehaviour
     [SerializeField] private GameObject loadingContainer;
     [SerializeField] private GameObject errorContainer;
 
+    [Header("Gameplay Menu")]
+    [SerializeField] private Button saveAndDisconnectButton;
+    [SerializeField] private Button resumeGameButton;
+
     [Header("Input Actions")]
     [SerializeField] private InputActionReference menuAction;
     
@@ -374,6 +378,10 @@ public class GameUIManager : MonoBehaviour
         
         // Error panel
         if (errorOkButton) errorOkButton.onClick.AddListener(HideErrorPanel);
+        
+        // Gameplay menu
+        if (saveAndDisconnectButton) saveAndDisconnectButton.onClick.AddListener(SaveAndDisconnect);
+        if (resumeGameButton) resumeGameButton.onClick.AddListener(() => SetGameplayMenuVisible(false));
     }
     
     private void SetDefaultValues()
@@ -1712,6 +1720,45 @@ public class GameUIManager : MonoBehaviour
         }
 
         SetGameplayMenuVisible(!isGameplayMenuVisible);
+    }
+    
+    private void SaveAndDisconnect()
+    {
+        Debug.Log("[GameUIManager] Save and Disconnect requested");
+        
+        // Save the world and all player positions
+        if (WorldSaveManager.Instance != null && WorldSaveManager.Instance.IsInitialized)
+        {
+            WorldSaveManager.Instance.SaveWorld();
+            Debug.Log("[GameUIManager] World saved successfully");
+        }
+        
+        // Disconnect from network
+        if (NetworkManager.Singleton != null)
+        {
+            if (NetworkManager.Singleton.IsServer)
+            {
+                Debug.Log("[GameUIManager] Shutting down server");
+                NetworkManager.Singleton.Shutdown();
+            }
+            else if (NetworkManager.Singleton.IsClient)
+            {
+                Debug.Log("[GameUIManager] Disconnecting client");
+                NetworkManager.Singleton.Shutdown();
+            }
+        }
+        
+        // Return to main menu
+        StartCoroutine(ReturnToMainMenuAfterDelay(0.5f));
+    }
+    
+    private IEnumerator ReturnToMainMenuAfterDelay(float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        
+        // Load the menu scene
+        Debug.Log("[GameUIManager] Returning to main menu");
+        UnityEngine.SceneManagement.SceneManager.LoadScene("MenuScene");
     }
 
     private void SetupMenuInputAction()

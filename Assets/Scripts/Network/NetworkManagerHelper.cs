@@ -14,6 +14,7 @@ public class NetworkManagerHelper : MonoBehaviour
     [Header("Player Integration")]
     [SerializeField] private float initialSetupDelay = 0.5f;
     [SerializeField] private float playerPositionUpdateInterval = 2f;
+    [SerializeField] private float playerPositionSaveInterval = 10f; // Save to disk every 10 seconds
     
     [Header("Terrain Integration")]
     [SerializeField] private bool ensureTerrainManagerExists = true;
@@ -22,6 +23,7 @@ public class NetworkManagerHelper : MonoBehaviour
     private NetworkManager networkManager;
     private Dictionary<ulong, GameObject> trackedPlayers = new Dictionary<ulong, GameObject>();
     private Dictionary<ulong, Vector3> playerPositions = new Dictionary<ulong, Vector3>();
+    private Dictionary<ulong, float> lastPositionSaveTime = new Dictionary<ulong, float>(); // Track when each player's position was last saved
     private float lastPositionUpdateTime = 0f;
 
     private void Awake()
@@ -63,6 +65,9 @@ public class NetworkManagerHelper : MonoBehaviour
 
     private void OnDestroy()
     {
+        // Save all player positions before destroying
+        SaveAllPlayerPositions();
+        
         if (networkManager != null)
         {
             networkManager.OnServerStarted -= OnServerStarted;
@@ -72,6 +77,35 @@ public class NetworkManagerHelper : MonoBehaviour
         
         trackedPlayers.Clear();
         playerPositions.Clear();
+        lastPositionSaveTime.Clear();
+    }
+    
+    private void OnApplicationQuit()
+    {
+        // Ensure all player positions are saved when quitting
+        Debug.Log("[NetworkManagerHelper] Application quitting - saving all player positions");
+        SaveAllPlayerPositions();
+    }
+    
+    private void SaveAllPlayerPositions()
+    {
+        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer)
+            return;
+            
+        if (PlayerSpawner.Instance == null)
+            return;
+        
+        foreach (var entry in trackedPlayers)
+        {
+            ulong clientId = entry.Key;
+            GameObject playerObj = entry.Value;
+            
+            if (playerObj != null)
+            {
+                PlayerSpawner.Instance.SavePlayerPosition(clientId, playerObj.transform.position);
+                Debug.Log($"[NetworkManagerHelper] Final save for player {clientId} at {playerObj.transform.position}");
+            }
+        }
     }
 
     public bool IsServerOnlyMode()
@@ -206,6 +240,7 @@ public class NetworkManagerHelper : MonoBehaviour
         // Clean up resources
         trackedPlayers.Remove(clientId);
         playerPositions.Remove(clientId);
+        lastPositionSaveTime.Remove(clientId); // Clean up save time tracking
         
         // Unregister player from World
         if (World.Instance != null)
@@ -266,6 +301,23 @@ public class NetworkManagerHelper : MonoBehaviour
                         if (Time.frameCount % 300 == 0)
                         {
                             Debug.Log($"[NetworkManagerHelper] Updated position for player {clientId}: {currentPos}");
+                        }
+                    }
+                }
+                
+                // Periodically save position to disk (separate from position updates)
+                if (!lastPositionSaveTime.TryGetValue(clientId, out float lastSaveTime) || 
+                    Time.time - lastSaveTime >= playerPositionSaveInterval)
+                {
+                    if (PlayerSpawner.Instance != null)
+                    {
+                        PlayerSpawner.Instance.SavePlayerPosition(clientId, currentPos);
+                        lastPositionSaveTime[clientId] = Time.time;
+                        
+                        // Log occasionally
+                        if (Time.frameCount % 300 == 0)
+                        {
+                            Debug.Log($"[NetworkManagerHelper] Saved position to disk for player {clientId}: {currentPos}");
                         }
                     }
                 }

@@ -457,7 +457,7 @@ MonoBehaviour:
   playerPositionKey: PlayerPosition
   autoRegisterWithNetworkManager: 1
   prioritizeSpawnTerrainLoading: 1
-  showDebugLogs: 0
+  showDebugLogs: 1
 --- !u!4 &769545738
 Transform:
   m_ObjectHideFlags: 0

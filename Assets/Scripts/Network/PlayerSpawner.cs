@@ -4,6 +4,7 @@ using UnityEngine;
 using Unity.Netcode;
 using NelsUtils;
 using System;
+using ControllerAssets;
 
 public class PlayerSpawner : MonoBehaviour
 {
@@ -21,7 +22,8 @@ public class PlayerSpawner : MonoBehaviour
     
     [Header("Integration")]
     [SerializeField] private bool autoRegisterWithNetworkManager = true;
-    [SerializeField] private bool prioritizeSpawnTerrainLoading = true;
+    // REMOVED: Unused field with UnifiedSpawnController
+    // [SerializeField] private bool prioritizeSpawnTerrainLoading = true;
     
     [Header("Debugging")]
     [SerializeField] private bool showDebugLogs = true;
@@ -30,13 +32,14 @@ public class PlayerSpawner : MonoBehaviour
     private Dictionary<ulong, Vector3> pendingSpawnPositions = new Dictionary<ulong, Vector3>();
     private Dictionary<ulong, bool> clientPositionLoaded = new Dictionary<ulong, bool>();
     private Dictionary<ulong, GameObject> playerObjects = new Dictionary<ulong, GameObject>();
+    private Dictionary<ulong, bool> clientTeleportedToSavedPosition = new Dictionary<ulong, bool>(); // Track if player was teleported to saved position
     private static PlayerSpawner instance;
     
     public static PlayerSpawner Instance { get { return instance; } }
     
-    // Events
-    public delegate void PlayerSpawnDelegate(ulong clientId, Vector3 position);
-    public event PlayerSpawnDelegate OnPlayerSpawnPositionFound;
+    // Events - Removed: OnPlayerSpawnPositionFound (no longer used with UnifiedSpawnController)
+    // public delegate void PlayerSpawnDelegate(ulong clientId, Vector3 position);
+    // public event PlayerSpawnDelegate OnPlayerSpawnPositionFound;
     
     private void Awake()
     {
@@ -57,17 +60,16 @@ public class PlayerSpawner : MonoBehaviour
     
     private void Start()
     {
-        // Register with NetworkManager if auto-register is enabled
+        // MODIFIED: PlayerSpawner is now a helper class only
+        // UnifiedSpawnController handles connection approval and spawn coordination
+        // This class just provides save/load functionality
+        
         if (autoRegisterWithNetworkManager && NetworkManager.Singleton != null)
         {
-            // Register to network events
-            NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
+            // Only register for disconnect to clean up data
             NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnected;
             
-            // Connect to NetworkManager's connection approval
-            NetworkManager.Singleton.ConnectionApprovalCallback += HandleConnectionApproval;
-            
-            DebugLog("Registered with NetworkManager for connection and approval events");
+            DebugLog("PlayerSpawner registered as helper (UnifiedSpawnController handles spawn coordination)");
         }
     }
     
@@ -76,68 +78,12 @@ public class PlayerSpawner : MonoBehaviour
         // Unregister from network events
         if (NetworkManager.Singleton != null)
         {
-            NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
             NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnected;
-            NetworkManager.Singleton.ConnectionApprovalCallback -= HandleConnectionApproval;
         }
     }
     
-    private void HandleConnectionApproval(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
-    {
-        // Special handling for server-only mode - no player needed
-        if (IsServerOnlyMode() && request.ClientNetworkId == NetworkManager.ServerClientId)
-        {
-            DebugLog("Server mode detected - no player object needed for the server itself");
-            response.Approved = true;
-            response.CreatePlayerObject = false; // Don't create player for the server itself
-            return;
-        }
-        
-        // Always approve normal clients
-        response.Approved = true;
-        response.CreatePlayerObject = true;
-        
-        // Get a spawn position
-        Vector3 spawnPosition = GetSpawnPosition(request.ClientNetworkId);
-        
-        // Set the spawn location
-        response.Position = spawnPosition;
-        response.Rotation = Quaternion.identity;
-        
-        DebugLog($"Connection approval for client {request.ClientNetworkId}: position={spawnPosition}");
-    }
-    
-    private void OnClientConnected(ulong clientId)
-    {
-        if (NetworkManager.Singleton.IsServer)
-        {
-            DebugLog($"Client {clientId} connected, preparing spawn position");
-            
-            // If this is a reconnection, try to load the previous position
-            Vector3 position = GetClientLastPosition(clientId);
-            
-            // If position is valid, mark as loaded and use it
-            if (position != Vector3.zero && loadPreviousPosition)
-            {
-                clientPositionLoaded[clientId] = true;
-                DebugLog($"Using previous position for client {clientId}: {position}");
-                pendingSpawnPositions[clientId] = position;
-                StartCoroutine(PrepareSpawnLocation(clientId, position));
-            }
-            else
-            {
-                // Otherwise, use default (0,0,0) spawn position
-                clientPositionLoaded[clientId] = false;
-                position = defaultSpawnPosition;
-                DebugLog($"Using default position for client {clientId}: {position}");
-                pendingSpawnPositions[clientId] = position;
-                StartCoroutine(PrepareSpawnLocation(clientId, position));
-            }
-            
-            // Track the player objects
-            StartCoroutine(FindPlayerObjectDelayed(clientId));
-        }
-    }
+    // REMOVED: HandleConnectionApproval - now handled by UnifiedSpawnController
+    // REMOVED: OnClientConnected - spawn coordination now handled by UnifiedSpawnController
     
     private void OnClientDisconnected(ulong clientId)
     {
@@ -151,51 +97,13 @@ public class PlayerSpawner : MonoBehaviour
         playerObjects.Remove(clientId);
         pendingSpawnPositions.Remove(clientId);
         clientPositionLoaded.Remove(clientId);
+        clientTeleportedToSavedPosition.Remove(clientId);
         
         DebugLog($"Client {clientId} disconnected, cleaned up references");
     }
     
-    private IEnumerator FindPlayerObjectDelayed(ulong clientId)
-    {
-        // Wait a few frames for the player object to spawn
-        yield return new WaitForSeconds(0.5f);
-        
-        GameObject playerObj = FindPlayerObject(clientId);
-        if (playerObj != null)
-        {
-            playerObjects[clientId] = playerObj;
-            DebugLog($"Found player object for client {clientId}: {playerObj.name}");
-        }
-        else
-        {
-            // Try again after a longer delay
-            yield return new WaitForSeconds(1.0f);
-            playerObj = FindPlayerObject(clientId);
-            if (playerObj != null)
-            {
-                playerObjects[clientId] = playerObj;
-                DebugLog($"Found player object for client {clientId} after delay: {playerObj.name}");
-            }
-            else
-            {
-                Debug.LogWarning($"Failed to find player object for client {clientId}");
-            }
-        }
-    }
-    
-    private GameObject FindPlayerObject(ulong clientId)
-    {
-        // Look through network spawn manager
-        foreach (var netObj in NetworkManager.Singleton.SpawnManager.SpawnedObjects.Values)
-        {
-            if (netObj.IsPlayerObject && netObj.OwnerClientId == clientId)
-            {
-                return netObj.gameObject;
-            }
-        }
-        
-        return null;
-    }
+    // REMOVED: FindPlayerObjectDelayed - now handled by UnifiedSpawnController
+    // REMOVED: FindPlayerObject - now handled by UnifiedSpawnController
     
     public void RegisterPlayerWithWorld(ulong clientId, GameObject playerObject)
     {
@@ -205,8 +113,19 @@ public class PlayerSpawner : MonoBehaviour
         // Store the reference
         playerObjects[clientId] = playerObject;
         
-        // Save the initial position
-        SavePlayerPosition(clientId, playerObject.transform.position);
+        // Only save position if NOT already teleported to saved position
+        // (teleporting to saved position already saved it)
+        bool alreadyTeleported = clientTeleportedToSavedPosition.TryGetValue(clientId, out bool wasTeleported) && wasTeleported;
+        if (!alreadyTeleported)
+        {
+            Debug.Log($"[PlayerSpawner] Saving initial spawn position for client {clientId}: {playerObject.transform.position}");
+            // Save the initial position
+            SavePlayerPosition(clientId, playerObject.transform.position);
+        }
+        else
+        {
+            Debug.Log($"[PlayerSpawner] Skipping position save for client {clientId} - already teleported to saved position");
+        }
         
         // Mark as loaded
         clientPositionLoaded[clientId] = true;
@@ -245,6 +164,14 @@ public class PlayerSpawner : MonoBehaviour
             NetworkManager.Singleton.IsServer && 
             !NetworkManager.Singleton.IsHost;
     }
+    
+    /// <summary>
+    /// Check if a player was teleported to a saved position (should skip spawn safety)
+    /// </summary>
+    public bool WasPlayerTeleportedToSavedPosition(ulong clientId)
+    {
+        return clientTeleportedToSavedPosition.TryGetValue(clientId, out bool wasTeleported) && wasTeleported;
+    }
 
     public void InitializeServerMode()
     {
@@ -265,31 +192,49 @@ public class PlayerSpawner : MonoBehaviour
         }
     }
 
-    private Vector3 GetClientLastPosition(ulong clientId)
+    public Vector3 GetClientLastPosition(ulong clientId)
     {
+        Debug.Log($"[PlayerSpawner] GetClientLastPosition called for client {clientId}");
+        Debug.Log($"[PlayerSpawner] loadPreviousPosition = {loadPreviousPosition}");
+        
         if (!loadPreviousPosition)
+        {
+            Debug.LogWarning($"[PlayerSpawner] loadPreviousPosition is DISABLED! Returning Vector3.zero");
             return Vector3.zero;
+        }
             
         try
         {
             // First try WorldSaveManager
             if (WorldSaveManager.Instance != null && WorldSaveManager.Instance.IsInitialized)
             {
+                Debug.Log($"[PlayerSpawner] WorldSaveManager is initialized, attempting to load player data for client {clientId}");
                 var playerData = WorldSaveManager.Instance.LoadPlayerData(clientId);
                 if (playerData != null)
                 {
                     Vector3 savedPos = playerData.Position;
+                    Debug.Log($"[PlayerSpawner] ✅ SUCCESSFULLY loaded player position from WorldSaveManager for client {clientId}: {savedPos}");
                     DebugLog($"Loaded player position from WorldSaveManager for client {clientId}: {savedPos}");
                     return savedPos;
                 }
+                else
+                {
+                    Debug.Log($"[PlayerSpawner] No saved player data found in WorldSaveManager for client {clientId}");
+                }
+            }
+            else
+            {
+                Debug.LogWarning($"[PlayerSpawner] WorldSaveManager is null or not initialized! Instance={WorldSaveManager.Instance}, Initialized={WorldSaveManager.Instance?.IsInitialized}");
             }
 
             // Fall back to PlayerPrefs for backward compatibility
             string key = $"{playerPositionKey}_{clientId}";
+            Debug.Log($"[PlayerSpawner] Checking PlayerPrefs with key: {key}");
             
             if (PlayerPrefs.HasKey(key))
             {
                 string posData = PlayerPrefs.GetString(key, "");
+                Debug.Log($"[PlayerSpawner] Found PlayerPrefs data: {posData}");
                 
                 if (!string.IsNullOrEmpty(posData))
                 {
@@ -299,16 +244,23 @@ public class PlayerSpawner : MonoBehaviour
                         float x = float.Parse(components[0]);
                         float y = float.Parse(components[1]);
                         float z = float.Parse(components[2]);
-                        return new Vector3(x, y, z);
+                        Vector3 loadedPos = new Vector3(x, y, z);
+                        Debug.Log($"[PlayerSpawner] ✅ Loaded position from PlayerPrefs for client {clientId}: {loadedPos}");
+                        return loadedPos;
                     }
                 }
+            }
+            else
+            {
+                Debug.Log($"[PlayerSpawner] No PlayerPrefs data found for key: {key}");
             }
         }
         catch (Exception e)
         {
-            Debug.LogError($"Error loading player position: {e.Message}");
+            Debug.LogError($"[PlayerSpawner] Error loading player position: {e.Message}\n{e.StackTrace}");
         }
         
+        Debug.Log($"[PlayerSpawner] No saved position found for client {clientId}, returning Vector3.zero");
         return Vector3.zero;
     }
     
@@ -354,64 +306,7 @@ public class PlayerSpawner : MonoBehaviour
         }
     }
     
-    private IEnumerator PrepareSpawnLocation(ulong clientId, Vector3 initialPosition)
-    {
-        DebugLog($"Preparing spawn location for client {clientId} at {initialPosition}");
-        
-        // Wait a short delay to allow things to initialize
-        yield return new WaitForSeconds(0.5f);
-        
-        // First ensure chunks are loaded around the initial position
-        if (prioritizeSpawnTerrainLoading)
-        {
-            EnsureTerrainLoaded(initialPosition);
-        }
-        
-        // Wait some more frames for terrain to generate - INCREASED WAIT TIME
-        yield return new WaitForSeconds(2.0f); // Increased from 1.0f to 2.0f
-        
-        // Find a valid ground position
-        Vector3 groundedPosition;
-        
-        if (clientPositionLoaded.TryGetValue(clientId, out bool isLoaded) && isLoaded)
-        {
-            // For returning players, just do a simple ground check
-            groundedPosition = FindGroundBelow(initialPosition);
-            
-            // If no ground found, fall back to full search
-            if (groundedPosition == Vector3.zero)
-            {
-                DebugLog($"No ground found below previous position, trying default position for client {clientId}");
-                groundedPosition = FindValidSpawnPosition(defaultSpawnPosition);
-            }
-        }
-        else
-        {
-            // For new players, start at the default position (0,0,0)
-            groundedPosition = FindValidSpawnPosition(defaultSpawnPosition);
-        }
-        
-        // If still no valid position, use a default high position
-        if (groundedPosition == Vector3.zero)
-        {
-            DebugLog($"WARNING: No valid ground found, using emergency spawn at height for client {clientId}");
-            groundedPosition = new Vector3(initialPosition.x, maxSpawnHeight / 2, initialPosition.z);
-        }
-        
-        // Update the pending position
-        pendingSpawnPositions[clientId] = groundedPosition;
-        
-        // Inform listeners that we found a position
-        OnPlayerSpawnPositionFound?.Invoke(clientId, groundedPosition);
-        
-        DebugLog($"Final spawn position for client {clientId}: {groundedPosition}");
-        
-        // If we already have a player object, teleport it to the new position
-        if (playerObjects.TryGetValue(clientId, out GameObject playerObj) && playerObj != null)
-        {
-            TeleportPlayer(clientId, playerObj, groundedPosition);
-        }
-    }
+    // REMOVED: PrepareSpawnLocation - now handled by UnifiedSpawnController Phase 4
 
     // MODIFY EnsureTerrainLoaded method in PlayerSpawner.cs
     private void EnsureTerrainLoaded(Vector3 position)
@@ -550,45 +445,7 @@ public class PlayerSpawner : MonoBehaviour
         return Vector3.zero;
     }
     
-    public Vector3 GetSpawnPosition(ulong clientId)
-    {
-        // If there's already a position pending, return it
-        if (pendingSpawnPositions.TryGetValue(clientId, out Vector3 position))
-        {
-            return position;
-        }
-        
-        // If we should load previous position and have one saved
-        if (loadPreviousPosition)
-        {
-            Vector3 savedPosition = GetClientLastPosition(clientId);
-            if (savedPosition != Vector3.zero)
-            {
-                DebugLog($"Using saved position for client {clientId}: {savedPosition}");
-                pendingSpawnPositions[clientId] = savedPosition;
-                
-                // Start looking for ground around this position
-                StartCoroutine(PrepareSpawnLocation(clientId, savedPosition));
-                
-                return savedPosition;
-            }
-        }
-        
-        // Otherwise use default spawn position (0,0,0)
-        Vector3 initialPos = new Vector3(
-            defaultSpawnPosition.x,
-            defaultSpawnPosition.y + 10f, // Start a bit above the default position
-            defaultSpawnPosition.z
-        );
-        
-        DebugLog($"Using default position for client {clientId}: {initialPos}");
-        pendingSpawnPositions[clientId] = initialPos;
-        
-        // Start looking for ground
-        StartCoroutine(PrepareSpawnLocation(clientId, initialPos));
-        
-        return initialPos;
-    }
+    // REMOVED: GetSpawnPosition - spawn position determination now handled by UnifiedSpawnController Phase 2
     
     public void RegisterPlayerSpawn(ulong clientId, Vector3 position)
     {
@@ -609,29 +466,51 @@ public class PlayerSpawner : MonoBehaviour
             return;
         }
         
-        DebugLog($"Teleporting player {clientId} to {position}");
+        Debug.Log($"[PlayerSpawner] Teleporting player {clientId} to {position}");
         
         // Disable any CharacterController before teleporting
         CharacterController charController = playerObject.GetComponent<CharacterController>();
+        bool wasCharControllerEnabled = false;
         if (charController != null)
         {
+            wasCharControllerEnabled = charController.enabled;
             charController.enabled = false;
+            Debug.Log($"[PlayerSpawner] Disabled CharacterController for teleport");
+        }
+        
+        // Disable ThirdPersonController if it's enabled (shouldn't be, but just in case)
+        var thirdPersonController = playerObject.GetComponent<ThirdPersonController>();
+        bool wasTPControllerEnabled = false;
+        if (thirdPersonController != null)
+        {
+            wasTPControllerEnabled = thirdPersonController.enabled;
+            thirdPersonController.enabled = false;
+            Debug.Log($"[PlayerSpawner] Disabled ThirdPersonController for teleport");
         }
         
         // Set position directly
         playerObject.transform.position = position;
+        Debug.Log($"[PlayerSpawner] Set transform.position to {position}");
         
-        // Re-enable CharacterController
-        if (charController != null)
-        {
-            charController.enabled = true;
-        }
+        // DON'T re-enable controllers here - let NetworkPlayerSetup handle that
+        // This prevents the CharacterController from doing a physics update before the player is fully initialized
+        Debug.Log($"[PlayerSpawner] Leaving controllers disabled - NetworkPlayerSetup will enable them");
         
         // If we have a NetworkTransform, use Teleport() method
         var netTransform = playerObject.GetComponent<Unity.Netcode.Components.NetworkTransform>();
         if (netTransform != null)
         {
             netTransform.Teleport(position, playerObject.transform.rotation, playerObject.transform.localScale);
+            Debug.Log($"[PlayerSpawner] Called NetworkTransform.Teleport()");
+        }
+        
+        // CRITICAL: Update NetworkPlayer's networkPosition NetworkVariable
+        // This prevents the network sync from reverting the teleport
+        var networkPlayer = playerObject.GetComponent<NetworkPlayer>();
+        if (networkPlayer != null && NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+        {
+            networkPlayer.SetNetworkPositionAuthority(position, playerObject.transform.rotation);
+            Debug.Log($"[PlayerSpawner] Set NetworkPlayer networkPosition to {position}");
         }
         
         // Update pending position and save it
