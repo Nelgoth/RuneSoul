@@ -234,6 +234,8 @@ public class ChunkStateManager : MonoBehaviour
         {
             if (World.Instance.TryGetChunk(chunkCoord, out Chunk chunk))
             {
+                // CRITICAL: Complete any pending jobs before saving
+                chunk.CompleteAllJobs();
                 chunk.GetChunkData()?.SaveData();
             }
         }

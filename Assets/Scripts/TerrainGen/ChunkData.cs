@@ -570,11 +570,10 @@ public class ChunkData : System.IDisposable
         // Ensure our pooled arrays exist
         EnsureArraysCreated();
 
-        // Force completion of any pending jobs before copying data
-        if (World.Instance.TryGetChunk(ChunkCoordinate, out Chunk chunk))
-        {
-            chunk.CompleteAllJobs();
-        }
+        // CRITICAL FIX: Do NOT call CompleteAllJobs() here!
+        // This method is called from the async save thread, which cannot safely call Unity APIs.
+        // CompleteAllJobs() MUST be called on the main thread before SaveData() queues the async operation.
+        // The caller (SaveData) is responsible for ensuring jobs are complete before calling this.
 
         // Copy from native arrays into the pooled arrays for saving
         for (int i = 0; i < densityPoints.Length; i++)

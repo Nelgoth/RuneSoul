@@ -45,6 +45,7 @@ public class Chunk : MonoBehaviour
     private JobHandle densityHandle;
     private JobHandle marchingHandle;
     private bool densityJobScheduled;
+    private bool marchingJobScheduled; // Track if marching cubes job is running
     
     // State flags
     private bool isDisposed;
@@ -616,6 +617,7 @@ public class Chunk : MonoBehaviour
 
             // Schedule using the allocator's method - use smaller batch size
             marchingHandle = marchingCubesAllocator.ScheduleJob(marchingCubesJob, totalVoxels, 32);
+            marchingJobScheduled = true; // Mark that job is running
         }
         catch (Exception e)
         {
@@ -628,6 +630,7 @@ public class Chunk : MonoBehaviour
         {
             if (vertexCounter.IsCreated) vertexCounter.Dispose();
             if (triangleCounter.IsCreated) triangleCounter.Dispose();
+            marchingJobScheduled = false; // Ensure flag is reset on failure
             timing.EndAllPhases();
             generationCoroutine = null;
             yield break;
@@ -651,6 +654,7 @@ public class Chunk : MonoBehaviour
         {
             // Complete the job
             marchingCubesAllocator.CompleteCurrentJob();
+            marchingJobScheduled = false; // Mark that job is complete
             timing.EndPhase("MarchingCubesJob");
         }
         catch (Exception e)
@@ -1024,20 +1028,21 @@ public class Chunk : MonoBehaviour
         
         if (isSolid)
         {
-            // Solid chunks: all density values should be above surfaceLevel (outside surface)
-            baselineDensity = chunkData.SurfaceLevel + 2.0f;
+            // CRITICAL FIX: Solid chunks should have density BELOW surfaceLevel
+            // In marching cubes: density < surfaceLevel = SOLID, density > surfaceLevel = AIR
+            baselineDensity = chunkData.SurfaceLevel - 2.0f;
             if (QuickCheckLogsEnabled)
             {
-                Debug.Log($"[InitializeQuickCheckChunkDensity] Initializing SOLID chunk {chunkData.ChunkCoordinate} with baseline density {baselineDensity}");
+                Debug.Log($"[InitializeQuickCheckChunkDensity] Initializing SOLID chunk {chunkData.ChunkCoordinate} with baseline density {baselineDensity} (below surfaceLevel={chunkData.SurfaceLevel})");
             }
         }
         else // isEmpty
         {
-            // Empty chunks: all density values should be below surfaceLevel (inside/under surface)
-            baselineDensity = chunkData.SurfaceLevel - 2.0f;
+            // Empty chunks should have density ABOVE surfaceLevel (air)
+            baselineDensity = chunkData.SurfaceLevel + 2.0f;
             if (QuickCheckLogsEnabled)
             {
-                Debug.Log($"[InitializeQuickCheckChunkDensity] Initializing EMPTY chunk {chunkData.ChunkCoordinate} with baseline density {baselineDensity}");
+                Debug.Log($"[InitializeQuickCheckChunkDensity] Initializing EMPTY chunk {chunkData.ChunkCoordinate} with baseline density {baselineDensity} (above surfaceLevel={chunkData.SurfaceLevel})");
             }
         }
         
@@ -1480,27 +1485,36 @@ public class Chunk : MonoBehaviour
         isMeshUpdateQueued = false;
         isGenerationQueued = false;
         isDisposed = false;
+        densityJobScheduled = false;
+        marchingJobScheduled = false;
     }
 
     public void CompleteAllJobs()
     {
         try
         {
-            if (generationCoroutine != null)
-            {
-                StopCoroutine(generationCoroutine);
-                generationCoroutine = null;
-            }
-
+            // CRITICAL FIX: Complete all job handles FIRST before touching coroutines
+            // This is essential for background thread safety (e.g., during saves)
+            
+            // Complete density job if running
             if (densityJobScheduled)
             {
                 densityHandle.Complete();
                 densityJobScheduled = false;
             }
 
+            // CRITICAL: Complete marching cubes job handle directly
+            // This ensures voxelArray writes are finished before saves try to read it
+            if (marchingJobScheduled)
+            {
+                // Complete the handle directly - this is thread-safe
+                marchingHandle.Complete();
+                marchingJobScheduled = false;
+            }
+
+            // Also complete via allocator for consistency
             if (marchingCubesAllocator != null && marchingCubesAllocator.IsCreated)
             {
-                // Force completion of any running marching cubes job
                 marchingCubesAllocator.CompleteCurrentJob();
                 
                 // Double check to ensure no jobs are still running
@@ -1510,11 +1524,47 @@ public class Chunk : MonoBehaviour
                     marchingCubesAllocator.CompleteCurrentJob();
                 }
             }
+            
+            // NOW handle coroutine cleanup (only on main thread)
+            // CRITICAL FIX: Capture the coroutine reference to prevent race condition
+            Coroutine coroutineToStop = generationCoroutine;
+            if (coroutineToStop != null)
+            {
+                // Check if we're on the main thread
+                try
+                {
+                    // Check if on main thread - this will throw if not
+                    bool isMainThread = System.Threading.Thread.CurrentThread.ManagedThreadId == 1 ||
+                                       UnityEngine.Object.FindAnyObjectByType<World>() != null;
+                    
+                    if (isMainThread)
+                    {
+                        StopCoroutine(coroutineToStop);
+                        generationCoroutine = null;
+                    }
+                    else
+                    {
+                        // Not on main thread - just set to null
+                        generationCoroutine = null;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Not on main thread or other error - just set to null, the jobs are already completed above
+                    Debug.Log($"[Chunk] CompleteAllJobs called from background thread for chunk {chunkData.ChunkCoordinate} - skipping coroutine stop: {ex.Message}");
+                    generationCoroutine = null;
+                }
+            }
         }
         catch (Exception e)
         {
+            // CRITICAL FIX: Don't re-throw - log and continue
+            // CompleteAllJobs is called from cleanup code (OnDestroy, saves, etc.)
+            // We want to complete as much as possible even if one part fails
             Debug.LogError($"Error completing jobs on chunk {chunkData.ChunkCoordinate}: {e.Message}\n{e.StackTrace}");
-            throw;
+            
+            // Still try to set coroutine to null to prevent repeated errors
+            generationCoroutine = null;
         }
     }
 

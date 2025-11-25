@@ -2521,6 +2521,9 @@ public class World : MonoBehaviour
                 if (chunks.TryGetValue(coordToSave, out Chunk chunkToSave) && 
                     chunkToSave.GetChunkData() != null)
                 {
+                    // CRITICAL: Complete any pending jobs before saving (mining operations can trigger mesh jobs)
+                    chunkToSave.CompleteAllJobs();
+                    
                     // Force save after modification
                     chunkToSave.GetChunkData().SaveData();
                     
@@ -2892,10 +2895,18 @@ public class World : MonoBehaviour
         Vector3Int chunkCoord = chunk.GetChunkData().ChunkCoordinate;
         bool wasSolid = false;
         
-        if (TerrainAnalysisCache.TryGetAnalysis(chunkCoord, out var analysis) && analysis.IsSolid)
+        // CRITICAL FIX: Check the chunk's own IsSolidChunk property first, as it's the source of truth
+        // The cache can be stale, especially right after InitializeQuickCheckChunkDensity() is called
+        ChunkData chunkData = chunk.GetChunkData();
+        if (chunkData != null && chunkData.IsSolidChunk)
         {
             wasSolid = true;
-            Debug.Log($"Processing solid chunk {chunkCoord} for density update - SPECIAL HANDLING");
+            Debug.Log($"Processing solid chunk {chunkCoord} for density update - SPECIAL HANDLING (detected from chunk property)");
+        }
+        else if (TerrainAnalysisCache.TryGetAnalysis(chunkCoord, out var analysis) && analysis.IsSolid)
+        {
+            wasSolid = true;
+            Debug.Log($"Processing solid chunk {chunkCoord} for density update - SPECIAL HANDLING (detected from cache)");
         }
         
         // Track if any density values changed
@@ -2915,7 +2926,7 @@ public class World : MonoBehaviour
         // DIAGNOSTIC: Log detailed information for traced chunks
         if (ShouldLogChunkDiagnostics(chunkCoord))
         {
-            var chunkData = chunk.GetChunkData();
+            // chunkData already declared at the start of the method
             Debug.Log($"[MOD_DIAG:{chunkCoord}] ApplyDensityUpdate called - " +
                 $"worldPos: {worldPos}, " +
                 $"chunkOrigin: {chunkOrigin}, " +
@@ -3151,10 +3162,29 @@ public class World : MonoBehaviour
                         // Standard approach for normal chunks
                         float targetDensity = isAdding ? surfaceLevel - 1.5f : surfaceLevel + 1.5f;
                         newDensity = Mathf.Lerp(oldDensity, targetDensity, falloff);
+                        
+                        // CRITICAL FIX: Detect when we're re-mining an already partially mined area
+                        // If the old density is already moving towards the target but not quite there,
+                        // force it to the full target to avoid getting stuck with tiny changes
+                        if (!isAdding && oldDensity > surfaceLevel && oldDensity < targetDensity)
+                        {
+                            // Density is already above surface level (partially mined) but not at full target
+                            // Use more aggressive interpolation with a minimum threshold
+                            float aggressiveFalloff = Mathf.Max(falloff, 0.5f);
+                            newDensity = Mathf.Lerp(oldDensity, targetDensity, aggressiveFalloff);
+                            
+                            // Ensure we make meaningful progress
+                            if (Math.Abs(newDensity - oldDensity) < Config.minDensityChangeThreshold)
+                            {
+                                newDensity = oldDensity + (targetDensity - oldDensity) * 0.5f; // Move halfway to target
+                            }
+                        }
                     }
                     
-                    // Apply the density change
-                    if (Math.Abs(newDensity - oldDensity) > Config.minDensityChangeThreshold)
+                    // Apply the density change with slightly more permissive threshold
+                    // CRITICAL FIX: Reduce threshold from 0.01 to 0.005 to catch edge cases
+                    float effectiveThreshold = Config.minDensityChangeThreshold * 0.5f;
+                    if (Math.Abs(newDensity - oldDensity) > effectiveThreshold)
                     {
                         pointsPassedThreshold++;
                         
@@ -3185,7 +3215,7 @@ public class World : MonoBehaviour
                         pointsSkippedThreshold++;
                         if (sampleCount < maxSamples)
                         {
-                            samplePoints.Add($"Pos({x},{y},{z}) SKIPPED - density change too small: old={oldDensity:F3} new={newDensity:F3} diff={Math.Abs(newDensity - oldDensity):F3} threshold={Config.minDensityChangeThreshold}");
+                            samplePoints.Add($"Pos({x},{y},{z}) SKIPPED - density change too small: old={oldDensity:F3} new={newDensity:F3} diff={Math.Abs(newDensity - oldDensity):F3} threshold={effectiveThreshold:F4}");
                             sampleCount++;
                         }
                     }
@@ -4138,6 +4168,19 @@ public class World : MonoBehaviour
                     Debug.Log($"[ProcessPendingUpdatesForChunk] Initializing QuickCheck chunk {chunkCoord} (Cache: Solid={isSolidChunk}, Empty={isEmptyChunk}, Chunk: Solid={chunkIsSolid}, Empty={chunkIsEmpty}) before processing updates");
                     LogChunkTrace(chunkCoord, $"ProcessPendingUpdatesForChunk: Initializing QuickCheck chunk before processing updates");
                     chunk.InitializeQuickCheckChunkDensity();
+                    
+                    // CRITICAL FIX: Immediately update the cache to reflect the chunk's actual state
+                    // This ensures ApplyDensityUpdate() sees the correct wasSolid value
+                    if (chunkIsSolid && !isSolidChunk)
+                    {
+                        Debug.Log($"[ProcessPendingUpdatesForChunk] Updating cache for solid chunk {chunkCoord} (cache was out of sync)");
+                        TerrainAnalysisCache.SaveAnalysis(chunkCoord, true, false, false);
+                    }
+                    else if (chunkIsEmpty && !isEmptyChunk)
+                    {
+                        Debug.Log($"[ProcessPendingUpdatesForChunk] Updating cache for empty chunk {chunkCoord} (cache was out of sync)");
+                        TerrainAnalysisCache.SaveAnalysis(chunkCoord, false, true, false);
+                    }
                 }
                 
                 var updates = new List<PendingDensityPointUpdate>(pendingDensityPointUpdates[chunkCoord]);
@@ -4992,6 +5035,24 @@ public class World : MonoBehaviour
                             chunksWithPendingNeighborUpdates.Contains(chunkCoord) ||
                             forcedBoundaryChunks.Contains(chunkCoord);
         }
+        
+        // CRITICAL FIX: Also check if chunk is waiting for mesh regeneration or actively generating
+        // This prevents unloading chunks that have finished processing density updates but are 
+        // still queued for mesh regeneration (which is rate-limited per frame)
+        if (!hasPendingUpdates && chunks.TryGetValue(chunkCoord, out Chunk chunk))
+        {
+            // Check if chunk is in the mesh update queue
+            if (chunksNeedingMeshUpdate != null && chunksNeedingMeshUpdate.Contains(chunk))
+            {
+                hasPendingUpdates = true;
+            }
+            // Check if chunk has an active generation coroutine
+            else if (chunk.generationCoroutine != null)
+            {
+                hasPendingUpdates = true;
+            }
+        }
+        
         return hasPendingUpdates;
     }
 

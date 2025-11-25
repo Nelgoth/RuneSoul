@@ -321,8 +321,10 @@ public static class SaveSystem
                 Debug.Log($"[SaveSystem] Saving chunk {data.ChunkCoordinate} to {filePath} (format: {format})");
             }
             
-            // Prepare data for serialization
-            data.PrepareForSerialization();
+            // CRITICAL FIX: Do NOT call PrepareForSerialization() here!
+            // This async method runs on a background thread and cannot safely call Unity APIs.
+            // PrepareForSerialization() MUST be called on the main thread before SaveData() queues this operation.
+            // The data should already be prepared when we reach this point.
             
             byte[] dataToWrite = null;
             

@@ -228,10 +228,15 @@ public class PlayerSpawner : MonoBehaviour
             }
 
             // Fall back to PlayerPrefs for backward compatibility
-            string key = $"{playerPositionKey}_{clientId}";
+            // IMPORTANT: Make the key world-specific to prevent loading positions from other worlds
+            string worldId = WorldSaveManager.Instance != null ? WorldSaveManager.Instance.CurrentWorldId : "";
+            string key = string.IsNullOrEmpty(worldId) 
+                ? $"{playerPositionKey}_{clientId}" 
+                : $"{playerPositionKey}_{worldId}_{clientId}";
             Debug.Log($"[PlayerSpawner] Checking PlayerPrefs with key: {key}");
             
-            if (PlayerPrefs.HasKey(key))
+            // Only use PlayerPrefs if we have a valid world ID (prevents loading from wrong world)
+            if (!string.IsNullOrEmpty(worldId) && PlayerPrefs.HasKey(key))
             {
                 string posData = PlayerPrefs.GetString(key, "");
                 Debug.Log($"[PlayerSpawner] Found PlayerPrefs data: {posData}");
@@ -252,7 +257,14 @@ public class PlayerSpawner : MonoBehaviour
             }
             else
             {
-                Debug.Log($"[PlayerSpawner] No PlayerPrefs data found for key: {key}");
+                if (string.IsNullOrEmpty(worldId))
+                {
+                    Debug.Log($"[PlayerSpawner] Skipping PlayerPrefs fallback - no world ID available");
+                }
+                else
+                {
+                    Debug.Log($"[PlayerSpawner] No PlayerPrefs data found for key: {key}");
+                }
             }
         }
         catch (Exception e)
@@ -274,11 +286,16 @@ public class PlayerSpawner : MonoBehaviour
             
         try
         {
-            // First save to PlayerPrefs for backward compatibility
-            string key = $"{playerPositionKey}_{clientId}";
-            string posData = $"{position.x},{position.y},{position.z}";
-            PlayerPrefs.SetString(key, posData);
-            PlayerPrefs.Save();
+            // First save to PlayerPrefs for backward compatibility (world-specific)
+            string worldId = WorldSaveManager.Instance != null ? WorldSaveManager.Instance.CurrentWorldId : "";
+            if (!string.IsNullOrEmpty(worldId))
+            {
+                string key = $"{playerPositionKey}_{worldId}_{clientId}";
+                string posData = $"{position.x},{position.y},{position.z}";
+                PlayerPrefs.SetString(key, posData);
+                PlayerPrefs.Save();
+                DebugLog($"Saved position to PlayerPrefs with world-specific key: {key}");
+            }
             
             // Also save to WorldSaveManager if available
             if (WorldSaveManager.Instance != null && WorldSaveManager.Instance.IsInitialized)
