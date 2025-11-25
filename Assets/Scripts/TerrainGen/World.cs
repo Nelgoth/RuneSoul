@@ -2505,13 +2505,20 @@ public class World : MonoBehaviour
                 }
             }
 
-            // Process mesh updates after all density updates
+            // Queue mesh updates for all modified chunks (use the proper queue system for coordination)
             foreach (var neighborCoord in chunksToModify)
             {
                 if (chunks.TryGetValue(neighborCoord, out Chunk neighborChunk))
                 {
-                    // Generate the mesh
-                    neighborChunk.Generate(log: false, fullMesh: false, quickCheck: false);
+                    // CRITICAL FIX: Use the mesh update queue instead of calling Generate() directly
+                    // Direct Generate() calls are asynchronous and don't coordinate with neighbors,
+                    // causing visual cracks at chunk boundaries when multiple chunks update simultaneously
+                    if (!neighborChunk.isMeshUpdateQueued)
+                    {
+                        neighborChunk.isMeshUpdateQueued = true;
+                        chunksNeedingMeshUpdate.Add(neighborChunk);
+                        Debug.Log($"[HandleVoxelDestruction] Queued mesh update for chunk {neighborCoord}");
+                    }
                 }
             }
             
