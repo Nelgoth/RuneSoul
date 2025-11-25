@@ -82,14 +82,36 @@ public static class BinaryChunkSerializer
             byte[] voxelStateData = null;
             byte[] voxelHitpointData = null;
             
+            // CRITICAL FIX: Use the serialized arrays prepared by PrepareForSerialization()
+            // instead of the NativeArrays that jobs might still be writing to!
             if (densityPointCount > 0)
             {
-                densityData = SerializeDensityPoints(data.DensityPoints);
+                // Use serializedDensityValues if available (safe for async serialization)
+                // Otherwise fall back to NativeArray (only for backward compatibility)
+                if (data.serializedDensityValues != null && data.serializedDensityValues.Length > 0)
+                {
+                    densityData = SerializeDensityValues(data.serializedDensityValues);
+                }
+                else
+                {
+                    densityData = SerializeDensityPoints(data.DensityPoints);
+                }
             }
             
             if (hasVoxelData)
             {
-                SerializeVoxelData(data.VoxelData, out voxelStateData, out voxelHitpointData);
+                // Use serialized voxel arrays if available (safe for async serialization)
+                // Otherwise fall back to NativeArray (only for backward compatibility)
+                if (data.serializedVoxelStates != null && data.serializedVoxelStates.Length > 0 &&
+                    data.serializedVoxelHitpoints != null && data.serializedVoxelHitpoints.Length > 0)
+                {
+                    SerializeVoxelArrays(data.serializedVoxelStates, data.serializedVoxelHitpoints, 
+                        out voxelStateData, out voxelHitpointData);
+                }
+                else
+                {
+                    SerializeVoxelData(data.VoxelData, out voxelStateData, out voxelHitpointData);
+                }
             }
             
             // Compress if requested and data is large enough to benefit
@@ -350,6 +372,60 @@ public static class BinaryChunkSerializer
                     voxel.hitpoints = reader.ReadSingle();
                     voxels[i] = voxel;
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Serializes density values from prepared float array (job-safe)
+    /// </summary>
+    private static byte[] SerializeDensityValues(float[] densityValues)
+    {
+        int count = densityValues.Length;
+        byte[] data = new byte[count * sizeof(float)];
+        
+        using (var ms = new MemoryStream(data))
+        using (var writer = new BinaryWriter(ms))
+        {
+            for (int i = 0; i < count; i++)
+            {
+                writer.Write(densityValues[i]);
+            }
+        }
+        
+        return data;
+    }
+
+    /// <summary>
+    /// Serializes voxel data from prepared arrays (job-safe)
+    /// </summary>
+    private static void SerializeVoxelArrays(int[] voxelStates, float[] voxelHitpoints, 
+        out byte[] stateData, out byte[] hitpointData)
+    {
+        int count = voxelStates.Length;
+        
+        // Pack voxel states into bytes (8 voxels per byte since isActive is 0 or 1)
+        int stateByteCount = (count + 7) / 8;
+        stateData = new byte[stateByteCount];
+        
+        for (int i = 0; i < count; i++)
+        {
+            if (voxelStates[i] != 0)
+            {
+                int byteIndex = i / 8;
+                int bitIndex = i % 8;
+                stateData[byteIndex] |= (byte)(1 << bitIndex);
+            }
+        }
+        
+        // Serialize hitpoints as floats
+        hitpointData = new byte[count * sizeof(float)];
+        using (var ms = new MemoryStream(hitpointData))
+        using (var writer = new BinaryWriter(ms))
+        {
+            for (int i = 0; i < count; i++)
+            {
+                writer.Write(voxelHitpoints[i]);
             }
         }
     }
