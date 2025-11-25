@@ -4196,6 +4196,10 @@ public class World : MonoBehaviour
                 Debug.Log($"[ProcessPendingUpdatesForChunk] Processing {updates.Count} density updates for chunk {chunkCoord}");
                 LogChunkTrace(chunkCoord, $"ProcessPendingUpdatesForChunk: Processing {updates.Count} density updates");
                 
+                // CRITICAL FIX: Complete all jobs before modifying density data
+                // ApplyDensityUpdate reads/writes densityPoints NativeArray, which DensityFieldGenerationJob may still be writing to
+                chunk.CompleteAllJobs();
+                
                 // CRITICAL FIX: Process ALL queued updates, not just the first one
                 // Multiple mining operations can queue multiple updates for the same chunk
                 bool anyDensityChanged = false;
@@ -4574,6 +4578,10 @@ public class World : MonoBehaviour
                                 
                                 Debug.Log($"[ProcessPendingUpdates] Processing {updates.Count} density updates for loaded chunk {chunkCoord} (state: {state.Status})");
                                 LogChunkTrace(chunkCoord, $"ProcessPendingUpdates: Processing {updates.Count} density updates - State: {state.Status}");
+                                
+                                // CRITICAL FIX: Complete all jobs before modifying density data
+                                // ApplyDensityUpdate reads/writes densityPoints NativeArray, which DensityFieldGenerationJob may still be writing to
+                                chunk.CompleteAllJobs();
                                 
                                 // CRITICAL FIX: Process ALL queued updates, not just the first one
                                 // Multiple mining operations can queue multiple updates for the same chunk
