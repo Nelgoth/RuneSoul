@@ -4823,189 +4823,6 @@ public class World : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Synchronize a chunk's boundary density with ALL loaded neighbors
-    /// This prevents cracks even when neighbors were modified in different operations
-    /// </summary>
-    private void SynchronizeChunkWithAllNeighbors(Chunk chunk)
-    {
-        Vector3Int chunkCoord = Coord.WorldToChunkCoord(chunk.transform.position, chunkSize, voxelSize);
-        var chunkData = chunk.GetChunkData();
-        if (chunkData == null) return;
-        
-        int boundariesSynced = 0;
-        List<Chunk> neighborsToRequeue = new List<Chunk>();
-        
-        // Check all 6 face neighbors
-        Vector3Int[] faceOffsets = new Vector3Int[]
-        {
-            new Vector3Int(1, 0, 0), new Vector3Int(-1, 0, 0),
-            new Vector3Int(0, 1, 0), new Vector3Int(0, -1, 0),
-            new Vector3Int(0, 0, 1), new Vector3Int(0, 0, -1)
-        };
-        
-        foreach (var offset in faceOffsets)
-        {
-            Vector3Int neighborCoord = chunkCoord + offset;
-            
-            // Check if neighbor is loaded
-            if (chunks.TryGetValue(neighborCoord, out Chunk neighborChunk))
-            {
-                var neighborData = neighborChunk.GetChunkData();
-                if (neighborData != null)
-                {
-                    // Synchronize this boundary (modifies both chunks' density)
-                    SynchronizeSharedBoundary(chunk, chunkData, chunkCoord, 
-                                            neighborChunk, neighborData, neighborCoord, offset);
-                    boundariesSynced++;
-                    
-                    // CRITICAL: If neighbor wasn't in the batch, queue it for remesh
-                    // Otherwise its mesh will be out of sync with the new density
-                    if (!neighborChunk.isMeshUpdateQueued)
-                    {
-                        neighborsToRequeue.Add(neighborChunk);
-                    }
-                }
-            }
-        }
-        
-        // Queue modified neighbors for mesh update
-        foreach (var neighbor in neighborsToRequeue)
-        {
-            neighbor.isMeshUpdateQueued = true;
-            chunksNeedingMeshUpdate.Add(neighbor);
-            
-            Vector3Int nCoord = Coord.WorldToChunkCoord(neighbor.transform.position, chunkSize, voxelSize);
-            Debug.Log($"[BoundarySync] Queued neighbor {nCoord} for remesh after boundary sync");
-        }
-        
-        if (boundariesSynced > 0)
-        {
-            Debug.Log($"[BoundarySync] Chunk {chunkCoord} synchronized {boundariesSynced} boundaries, queued {neighborsToRequeue.Count} neighbors for remesh");
-        }
-    }
-    
-    /// <summary>
-    /// Synchronize density values at boundaries between neighbor chunks in a batch
-    /// This prevents cracks by ensuring matching density at shared boundary points
-    /// </summary>
-    private void SynchronizeBatchBoundaries(List<Chunk> batch)
-    {
-        int boundariesSynced = 0;
-        
-        // For each pair of neighbors in the batch, synchronize their shared boundary
-        for (int i = 0; i < batch.Count; i++)
-        {
-            Chunk chunkA = batch[i];
-            Vector3Int coordA = Coord.WorldToChunkCoord(chunkA.transform.position, chunkSize, voxelSize);
-            var dataA = chunkA.GetChunkData();
-            if (dataA == null) continue;
-            
-            for (int j = i + 1; j < batch.Count; j++)
-            {
-                Chunk chunkB = batch[j];
-                Vector3Int coordB = Coord.WorldToChunkCoord(chunkB.transform.position, chunkSize, voxelSize);
-                var dataB = chunkB.GetChunkData();
-                if (dataB == null) continue;
-                
-                // Check if they're direct neighbors (face-adjacent)
-                Vector3Int diff = coordB - coordA;
-                bool isFaceNeighbor = (Mathf.Abs(diff.x) + Mathf.Abs(diff.y) + Mathf.Abs(diff.z)) == 1;
-                
-                if (isFaceNeighbor)
-                {
-                    // Synchronize the shared boundary
-                    SynchronizeSharedBoundary(chunkA, dataA, coordA, chunkB, dataB, coordB, diff);
-                    boundariesSynced++;
-                }
-            }
-        }
-        
-        if (boundariesSynced > 0)
-        {
-            Debug.Log($"[BoundarySync] Synchronized {boundariesSynced} boundaries in batch of {batch.Count} chunks");
-        }
-    }
-
-    /// <summary>
-    /// Synchronize density values at the shared boundary between two neighbor chunks
-    /// </summary>
-    private void SynchronizeSharedBoundary(Chunk chunkA, ChunkData dataA, Vector3Int coordA, 
-                                          Chunk chunkB, ChunkData dataB, Vector3Int coordB, Vector3Int diff)
-    {
-        int pointsPerAxis = dataA.TotalPointsPerAxis;
-        
-        // Determine which face is shared based on diff
-        // diff will be one of: (±1,0,0), (0,±1,0), (0,0,±1)
-        
-        if (diff.x != 0) // X-axis boundary
-        {
-            int xA = diff.x > 0 ? pointsPerAxis - 1 : 0; // Last or first X in chunk A
-            int xB = diff.x > 0 ? 0 : pointsPerAxis - 1; // First or last X in chunk B
-            
-            for (int y = 0; y < pointsPerAxis; y++)
-            for (int z = 0; z < pointsPerAxis; z++)
-            {
-                SynchronizeBoundaryPoint(dataA, dataB, xA, y, z, xB, y, z, pointsPerAxis);
-            }
-        }
-        else if (diff.y != 0) // Y-axis boundary
-        {
-            int yA = diff.y > 0 ? pointsPerAxis - 1 : 0;
-            int yB = diff.y > 0 ? 0 : pointsPerAxis - 1;
-            
-            for (int x = 0; x < pointsPerAxis; x++)
-            for (int z = 0; z < pointsPerAxis; z++)
-            {
-                SynchronizeBoundaryPoint(dataA, dataB, x, yA, z, x, yB, z, pointsPerAxis);
-            }
-        }
-        else if (diff.z != 0) // Z-axis boundary
-        {
-            int zA = diff.z > 0 ? pointsPerAxis - 1 : 0;
-            int zB = diff.z > 0 ? 0 : pointsPerAxis - 1;
-            
-            for (int x = 0; x < pointsPerAxis; x++)
-            for (int y = 0; y < pointsPerAxis; y++)
-            {
-                SynchronizeBoundaryPoint(dataA, dataB, x, y, zA, x, y, zB, pointsPerAxis);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Synchronize a single density point between two chunks by averaging their values
-    /// </summary>
-    private void SynchronizeBoundaryPoint(ChunkData dataA, ChunkData dataB, 
-                                         int xA, int yA, int zA, int xB, int yB, int zB,
-                                         int pointsPerAxis)
-    {
-        int indexA = xA + pointsPerAxis * (yA + pointsPerAxis * zA);
-        int indexB = xB + pointsPerAxis * (yB + pointsPerAxis * zB);
-        
-        if (indexA < 0 || indexA >= dataA.DensityPoints.Length ||
-            indexB < 0 || indexB >= dataB.DensityPoints.Length)
-            return;
-        
-        // Get current density values
-        float densityA = dataA.DensityPoints[indexA].density;
-        float densityB = dataB.DensityPoints[indexB].density;
-        
-        // Average them for perfect boundary match
-        float avgDensity = (densityA + densityB) / 2f;
-        
-        // Set both to the same value
-        dataA.SetDensityPoint(indexA, new DensityPoint(
-            dataA.DensityPoints[indexA].position,
-            avgDensity
-        ));
-        
-        dataB.SetDensityPoint(indexB, new DensityPoint(
-            dataB.DensityPoints[indexB].position,
-            avgDensity
-        ));
-    }
-
     private void ProcessMeshUpdates()
     {
         if (chunksNeedingMeshUpdate == null || chunksNeedingMeshUpdate.Count == 0) return;
@@ -5073,13 +4890,34 @@ public class World : MonoBehaviour
             // If entire batch fits, process it
             if (batch.Count <= remainingBudget)
             {
-                // CRITICAL FIX: Synchronize boundary density with ALL loaded neighbors, not just those in batch
-                // This prevents cracks even when neighboring chunks were modified in different operations
+                // CRITICAL FIX: Queue all face neighbors of chunks in batch for mesh update
+                // This ensures boundaries stay synchronized even with chunks modified in different operations
+                HashSet<Chunk> neighborsToQueue = new HashSet<Chunk>();
                 foreach (var batchChunk in batch)
                 {
-                    SynchronizeChunkWithAllNeighbors(batchChunk);
+                    Vector3Int chunkCoord = Coord.WorldToChunkCoord(batchChunk.transform.position, chunkSize, voxelSize);
+                    
+                    // Check all 6 face neighbors
+                    Vector3Int[] faceOffsets = new Vector3Int[]
+                    {
+                        new Vector3Int(1, 0, 0), new Vector3Int(-1, 0, 0),
+                        new Vector3Int(0, 1, 0), new Vector3Int(0, -1, 0),
+                        new Vector3Int(0, 0, 1), new Vector3Int(0, 0, -1)
+                    };
+                    
+                    foreach (var offset in faceOffsets)
+                    {
+                        Vector3Int neighborCoord = chunkCoord + offset;
+                        if (chunks.TryGetValue(neighborCoord, out Chunk neighbor) &&
+                            !batch.Contains(neighbor) && // Not already in this batch
+                            !neighbor.isMeshUpdateQueued) // Not already queued
+                        {
+                            neighborsToQueue.Add(neighbor);
+                        }
+                    }
                 }
                 
+                // Generate meshes for the batch
                 foreach (var batchChunk in batch)
                 {
                     // CRITICAL FIX: Pass fullMesh=true to ensure the mesh actually regenerates from density data
@@ -5087,6 +4925,18 @@ public class World : MonoBehaviour
                     batchChunk.isMeshUpdateQueued = false;
                     processedChunks.Add(batchChunk);
                     updatesThisFrame++;
+                }
+                
+                // Queue face neighbors for mesh update to keep boundaries synchronized
+                foreach (var neighbor in neighborsToQueue)
+                {
+                    neighbor.isMeshUpdateQueued = true;
+                    chunksNeedingMeshUpdate.Add(neighbor);
+                }
+                
+                if (neighborsToQueue.Count > 0)
+                {
+                    Debug.Log($"[MeshUpdate] Queued {neighborsToQueue.Count} face neighbors after batch processing to maintain boundary sync");
                 }
             }
             // else: Batch doesn't fit - skip entirely to avoid partial updates that create large cracks
