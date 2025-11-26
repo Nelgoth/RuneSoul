@@ -68,9 +68,21 @@ Mining at boundary between Chunk A and Chunk B:
 
 ## The Solution: Boundary Density Synchronization
 
+### Critical Insight: Must Synchronize With ALL Neighbors
+
+**Initial approach (wrong)**: Only synchronize chunks within the same batch
+- Problem: Chunks modified in different mining operations won't be synchronized
+- Example: Mine chunk A yesterday, mine chunk B today → crack between them
+
+**Correct approach**: Synchronize with ALL loaded neighbors AND requeue them
+- Chunk B synchronizes with neighbor chunk A (even if A not in batch)
+- Both get matching boundary density
+- Chunk A gets queued for remesh (since its density changed)
+- Result: Perfect match!
+
 ### Implementation
 
-Added three new methods to `World.cs`:
+Added four new methods to `World.cs`:
 
 #### 1. SynchronizeBatchBoundaries(List<Chunk> batch)
 

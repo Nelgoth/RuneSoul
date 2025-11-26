@@ -4824,11 +4824,75 @@ public class World : MonoBehaviour
     }
 
     /// <summary>
+    /// Synchronize a chunk's boundary density with ALL loaded neighbors
+    /// This prevents cracks even when neighbors were modified in different operations
+    /// </summary>
+    private void SynchronizeChunkWithAllNeighbors(Chunk chunk)
+    {
+        Vector3Int chunkCoord = Coord.WorldToChunkCoord(chunk.transform.position, chunkSize, voxelSize);
+        var chunkData = chunk.GetChunkData();
+        if (chunkData == null) return;
+        
+        int boundariesSynced = 0;
+        List<Chunk> neighborsToRequeue = new List<Chunk>();
+        
+        // Check all 6 face neighbors
+        Vector3Int[] faceOffsets = new Vector3Int[]
+        {
+            new Vector3Int(1, 0, 0), new Vector3Int(-1, 0, 0),
+            new Vector3Int(0, 1, 0), new Vector3Int(0, -1, 0),
+            new Vector3Int(0, 0, 1), new Vector3Int(0, 0, -1)
+        };
+        
+        foreach (var offset in faceOffsets)
+        {
+            Vector3Int neighborCoord = chunkCoord + offset;
+            
+            // Check if neighbor is loaded
+            if (chunks.TryGetValue(neighborCoord, out Chunk neighborChunk))
+            {
+                var neighborData = neighborChunk.GetChunkData();
+                if (neighborData != null)
+                {
+                    // Synchronize this boundary (modifies both chunks' density)
+                    SynchronizeSharedBoundary(chunk, chunkData, chunkCoord, 
+                                            neighborChunk, neighborData, neighborCoord, offset);
+                    boundariesSynced++;
+                    
+                    // CRITICAL: If neighbor wasn't in the batch, queue it for remesh
+                    // Otherwise its mesh will be out of sync with the new density
+                    if (!neighborChunk.isMeshUpdateQueued)
+                    {
+                        neighborsToRequeue.Add(neighborChunk);
+                    }
+                }
+            }
+        }
+        
+        // Queue modified neighbors for mesh update
+        foreach (var neighbor in neighborsToRequeue)
+        {
+            neighbor.isMeshUpdateQueued = true;
+            chunksNeedingMeshUpdate.Add(neighbor);
+            
+            Vector3Int nCoord = Coord.WorldToChunkCoord(neighbor.transform.position, chunkSize, voxelSize);
+            Debug.Log($"[BoundarySync] Queued neighbor {nCoord} for remesh after boundary sync");
+        }
+        
+        if (boundariesSynced > 0)
+        {
+            Debug.Log($"[BoundarySync] Chunk {chunkCoord} synchronized {boundariesSynced} boundaries, queued {neighborsToRequeue.Count} neighbors for remesh");
+        }
+    }
+    
+    /// <summary>
     /// Synchronize density values at boundaries between neighbor chunks in a batch
     /// This prevents cracks by ensuring matching density at shared boundary points
     /// </summary>
     private void SynchronizeBatchBoundaries(List<Chunk> batch)
     {
+        int boundariesSynced = 0;
+        
         // For each pair of neighbors in the batch, synchronize their shared boundary
         for (int i = 0; i < batch.Count; i++)
         {
@@ -4852,8 +4916,14 @@ public class World : MonoBehaviour
                 {
                     // Synchronize the shared boundary
                     SynchronizeSharedBoundary(chunkA, dataA, coordA, chunkB, dataB, coordB, diff);
+                    boundariesSynced++;
                 }
             }
+        }
+        
+        if (boundariesSynced > 0)
+        {
+            Debug.Log($"[BoundarySync] Synchronized {boundariesSynced} boundaries in batch of {batch.Count} chunks");
         }
     }
 
@@ -5003,9 +5073,12 @@ public class World : MonoBehaviour
             // If entire batch fits, process it
             if (batch.Count <= remainingBudget)
             {
-                // CRITICAL FIX: Synchronize boundary density BEFORE mesh generation
-                // This ensures neighbor chunks have matching density values at shared boundaries
-                SynchronizeBatchBoundaries(batch);
+                // CRITICAL FIX: Synchronize boundary density with ALL loaded neighbors, not just those in batch
+                // This prevents cracks even when neighboring chunks were modified in different operations
+                foreach (var batchChunk in batch)
+                {
+                    SynchronizeChunkWithAllNeighbors(batchChunk);
+                }
                 
                 foreach (var batchChunk in batch)
                 {
