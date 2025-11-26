@@ -9,7 +9,7 @@ public class PlayerFallRecovery : NetworkBehaviour
 {
     [Header("Fall Detection")]
     [SerializeField] private float minAcceptableHeight = -20f;
-    [SerializeField] private float checkInterval = 1f;
+    [SerializeField] private float checkInterval = 0.5f; // Check twice per second for more responsive detection
     [SerializeField] private int maxSelfRescueAttempts = 3;
     [SerializeField] private int immediateChunkLoadRadius = 2;
     
@@ -36,7 +36,7 @@ public class PlayerFallRecovery : NetworkBehaviour
     // Velocity-based fall detection
     private Vector3 lastPosition;
     private float continuousFallTime = 0f;
-    private float maxContinuousFallTime = 3f; // Trigger rescue after 3 seconds of falling
+    private float maxContinuousFallTime = 2f; // Trigger rescue after 2 seconds of falling (was 3)
 
     private void Awake()
     {
@@ -98,10 +98,24 @@ public class PlayerFallRecovery : NetworkBehaviour
 
     private void OnEnable()
     {
-        // When enabled (by UnifiedSpawnController), start the check coroutine
-        if (IsOwner && isInitialized)
+        // When enabled (by UnifiedSpawnController), ensure we're initialized
+        if (IsOwner)
         {
-            Debug.Log($"[PlayerFallRecovery] Enabled for player {OwnerClientId}, starting fall detection");
+            Debug.Log($"[PlayerFallRecovery] Enabled for player {OwnerClientId}");
+            
+            // If not initialized yet, do it now
+            if (!isInitialized)
+            {
+                // Initialize immediately when enabled
+                if (validPositionHistory != null && IsPositionValid(transform.position))
+                {
+                    validPositionHistory.Add(transform.position);
+                }
+                isInitialized = true;
+                Debug.Log($"[PlayerFallRecovery] Initialized on enable for player {OwnerClientId}");
+            }
+            
+            // Start fall detection
             StartCheckCoroutine();
         }
     }
@@ -162,6 +176,8 @@ public class PlayerFallRecovery : NetworkBehaviour
         yield return new WaitForSeconds(1f);
         lastPosition = transform.position;
         
+        Debug.Log($"[PlayerFallRecovery] CheckFallStatus coroutine started for player {OwnerClientId} at Y={lastPosition.y}");
+        
         while (true)
         {
             yield return new WaitForSeconds(checkInterval);
@@ -173,11 +189,18 @@ public class PlayerFallRecovery : NetworkBehaviour
             float verticalVelocity = (currentPosition.y - lastPosition.y) / checkInterval;
             
             // Check if player is falling (moving downward quickly)
-            bool isFallingNow = verticalVelocity < -2f; // Falling faster than 2 units/second
+            // Lower threshold to catch falls earlier (-1.5 instead of -2)
+            bool isFallingNow = verticalVelocity < -1.5f;
             
             if (isFallingNow)
             {
                 continuousFallTime += checkInterval;
+                
+                // Log every second while falling to help diagnose issues
+                if (continuousFallTime >= 1f && Mathf.Approximately(continuousFallTime % 1f, 0f))
+                {
+                    Debug.Log($"[PlayerFallRecovery] Falling detected: Y={currentPosition.y:F1}, velocity={verticalVelocity:F2}, fallTime={continuousFallTime:F1}s");
+                }
             }
             else
             {
