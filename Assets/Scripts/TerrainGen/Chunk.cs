@@ -413,7 +413,9 @@ public class Chunk : MonoBehaviour
         
         if (fullMesh || !chunkData.DensityPoints.IsCreated)
         {
-            bool hasExistingData = chunkData.HasSavedData;
+            // CRITICAL FIX: Check BOTH saved and modified data to avoid regenerating from noise
+            // and destroying in-memory modifications from mining operations!
+            bool hasExistingData = chunkData.HasSavedData || chunkData.HasModifiedData;
             
             if (!hasExistingData)
             {
