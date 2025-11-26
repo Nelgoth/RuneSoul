@@ -4823,6 +4823,119 @@ public class World : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Synchronize density values at boundaries between neighbor chunks in a batch
+    /// This prevents cracks by ensuring matching density at shared boundary points
+    /// </summary>
+    private void SynchronizeBatchBoundaries(List<Chunk> batch)
+    {
+        // For each pair of neighbors in the batch, synchronize their shared boundary
+        for (int i = 0; i < batch.Count; i++)
+        {
+            Chunk chunkA = batch[i];
+            Vector3Int coordA = Coord.WorldToChunkCoord(chunkA.transform.position, chunkSize, voxelSize);
+            var dataA = chunkA.GetChunkData();
+            if (dataA == null) continue;
+            
+            for (int j = i + 1; j < batch.Count; j++)
+            {
+                Chunk chunkB = batch[j];
+                Vector3Int coordB = Coord.WorldToChunkCoord(chunkB.transform.position, chunkSize, voxelSize);
+                var dataB = chunkB.GetChunkData();
+                if (dataB == null) continue;
+                
+                // Check if they're direct neighbors (face-adjacent)
+                Vector3Int diff = coordB - coordA;
+                bool isFaceNeighbor = (Mathf.Abs(diff.x) + Mathf.Abs(diff.y) + Mathf.Abs(diff.z)) == 1;
+                
+                if (isFaceNeighbor)
+                {
+                    // Synchronize the shared boundary
+                    SynchronizeSharedBoundary(chunkA, dataA, coordA, chunkB, dataB, coordB, diff);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Synchronize density values at the shared boundary between two neighbor chunks
+    /// </summary>
+    private void SynchronizeSharedBoundary(Chunk chunkA, ChunkData dataA, Vector3Int coordA, 
+                                          Chunk chunkB, ChunkData dataB, Vector3Int coordB, Vector3Int diff)
+    {
+        int pointsPerAxis = dataA.TotalPointsPerAxis;
+        
+        // Determine which face is shared based on diff
+        // diff will be one of: (±1,0,0), (0,±1,0), (0,0,±1)
+        
+        if (diff.x != 0) // X-axis boundary
+        {
+            int xA = diff.x > 0 ? pointsPerAxis - 1 : 0; // Last or first X in chunk A
+            int xB = diff.x > 0 ? 0 : pointsPerAxis - 1; // First or last X in chunk B
+            
+            for (int y = 0; y < pointsPerAxis; y++)
+            for (int z = 0; z < pointsPerAxis; z++)
+            {
+                SynchronizeBoundaryPoint(dataA, dataB, xA, y, z, xB, y, z, pointsPerAxis);
+            }
+        }
+        else if (diff.y != 0) // Y-axis boundary
+        {
+            int yA = diff.y > 0 ? pointsPerAxis - 1 : 0;
+            int yB = diff.y > 0 ? 0 : pointsPerAxis - 1;
+            
+            for (int x = 0; x < pointsPerAxis; x++)
+            for (int z = 0; z < pointsPerAxis; z++)
+            {
+                SynchronizeBoundaryPoint(dataA, dataB, x, yA, z, x, yB, z, pointsPerAxis);
+            }
+        }
+        else if (diff.z != 0) // Z-axis boundary
+        {
+            int zA = diff.z > 0 ? pointsPerAxis - 1 : 0;
+            int zB = diff.z > 0 ? 0 : pointsPerAxis - 1;
+            
+            for (int x = 0; x < pointsPerAxis; x++)
+            for (int y = 0; y < pointsPerAxis; y++)
+            {
+                SynchronizeBoundaryPoint(dataA, dataB, x, y, zA, x, y, zB, pointsPerAxis);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Synchronize a single density point between two chunks by averaging their values
+    /// </summary>
+    private void SynchronizeBoundaryPoint(ChunkData dataA, ChunkData dataB, 
+                                         int xA, int yA, int zA, int xB, int yB, int zB,
+                                         int pointsPerAxis)
+    {
+        int indexA = xA + pointsPerAxis * (yA + pointsPerAxis * zA);
+        int indexB = xB + pointsPerAxis * (yB + pointsPerAxis * zB);
+        
+        if (indexA < 0 || indexA >= dataA.DensityPoints.Length ||
+            indexB < 0 || indexB >= dataB.DensityPoints.Length)
+            return;
+        
+        // Get current density values
+        float densityA = dataA.DensityPoints[indexA].density;
+        float densityB = dataB.DensityPoints[indexB].density;
+        
+        // Average them for perfect boundary match
+        float avgDensity = (densityA + densityB) / 2f;
+        
+        // Set both to the same value
+        dataA.SetDensityPoint(indexA, new DensityPoint(
+            dataA.DensityPoints[indexA].position,
+            avgDensity
+        ));
+        
+        dataB.SetDensityPoint(indexB, new DensityPoint(
+            dataB.DensityPoints[indexB].position,
+            avgDensity
+        ));
+    }
+
     private void ProcessMeshUpdates()
     {
         if (chunksNeedingMeshUpdate == null || chunksNeedingMeshUpdate.Count == 0) return;
@@ -4890,6 +5003,10 @@ public class World : MonoBehaviour
             // If entire batch fits, process it
             if (batch.Count <= remainingBudget)
             {
+                // CRITICAL FIX: Synchronize boundary density BEFORE mesh generation
+                // This ensures neighbor chunks have matching density values at shared boundaries
+                SynchronizeBatchBoundaries(batch);
+                
                 foreach (var batchChunk in batch)
                 {
                     // CRITICAL FIX: Pass fullMesh=true to ensure the mesh actually regenerates from density data
