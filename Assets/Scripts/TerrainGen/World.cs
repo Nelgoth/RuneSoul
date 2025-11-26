@@ -4890,34 +4890,6 @@ public class World : MonoBehaviour
             // If entire batch fits, process it
             if (batch.Count <= remainingBudget)
             {
-                // CRITICAL FIX: Queue all face neighbors of chunks in batch for mesh update
-                // This ensures boundaries stay synchronized even with chunks modified in different operations
-                HashSet<Chunk> neighborsToQueue = new HashSet<Chunk>();
-                foreach (var batchChunk in batch)
-                {
-                    Vector3Int chunkCoord = Coord.WorldToChunkCoord(batchChunk.transform.position, chunkSize, voxelSize);
-                    
-                    // Check all 6 face neighbors
-                    Vector3Int[] faceOffsets = new Vector3Int[]
-                    {
-                        new Vector3Int(1, 0, 0), new Vector3Int(-1, 0, 0),
-                        new Vector3Int(0, 1, 0), new Vector3Int(0, -1, 0),
-                        new Vector3Int(0, 0, 1), new Vector3Int(0, 0, -1)
-                    };
-                    
-                    foreach (var offset in faceOffsets)
-                    {
-                        Vector3Int neighborCoord = chunkCoord + offset;
-                        if (chunks.TryGetValue(neighborCoord, out Chunk neighbor) &&
-                            !batch.Contains(neighbor) && // Not already in this batch
-                            !neighbor.isMeshUpdateQueued) // Not already queued
-                        {
-                            neighborsToQueue.Add(neighbor);
-                        }
-                    }
-                }
-                
-                // Generate meshes for the batch
                 foreach (var batchChunk in batch)
                 {
                     // CRITICAL FIX: Pass fullMesh=true to ensure the mesh actually regenerates from density data
@@ -4925,18 +4897,6 @@ public class World : MonoBehaviour
                     batchChunk.isMeshUpdateQueued = false;
                     processedChunks.Add(batchChunk);
                     updatesThisFrame++;
-                }
-                
-                // Queue face neighbors for mesh update to keep boundaries synchronized
-                foreach (var neighbor in neighborsToQueue)
-                {
-                    neighbor.isMeshUpdateQueued = true;
-                    chunksNeedingMeshUpdate.Add(neighbor);
-                }
-                
-                if (neighborsToQueue.Count > 0)
-                {
-                    Debug.Log($"[MeshUpdate] Queued {neighborsToQueue.Count} face neighbors after batch processing to maintain boundary sync");
                 }
             }
             // else: Batch doesn't fit - skip entirely to avoid partial updates that create large cracks
