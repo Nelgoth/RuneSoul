@@ -4823,6 +4823,140 @@ public class World : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Synchronize boundary density between neighbors in a batch
+    /// This prevents cracks by ensuring exact density matches at shared boundaries
+    /// DOES NOT queue additional chunks - only syncs data already in batch
+    /// </summary>
+    private void SyncBoundaryDensityInBatch(List<Chunk> batch)
+    {
+        int boundariesSynced = 0;
+        
+        // For each pair of neighbors in the batch
+        for (int i = 0; i < batch.Count; i++)
+        {
+            Chunk chunkA = batch[i];
+            Vector3Int coordA = Coord.WorldToChunkCoord(chunkA.transform.position, chunkSize, voxelSize);
+            var dataA = chunkA.GetChunkData();
+            if (dataA == null || !dataA.DensityPoints.IsCreated) continue;
+            
+            for (int j = i + 1; j < batch.Count; j++)
+            {
+                Chunk chunkB = batch[j];
+                Vector3Int coordB = Coord.WorldToChunkCoord(chunkB.transform.position, chunkSize, voxelSize);
+                var dataB = chunkB.GetChunkData();
+                if (dataB == null || !dataB.DensityPoints.IsCreated) continue;
+                
+                // Check if they're face neighbors
+                Vector3Int diff = coordB - coordA;
+                int manhattanDist = Mathf.Abs(diff.x) + Mathf.Abs(diff.y) + Mathf.Abs(diff.z);
+                if (manhattanDist != 1) continue; // Not face neighbors
+                
+                // Synchronize shared boundary
+                int pointsPerAxis = dataA.TotalPointsPerAxis;
+                int pointsSynced = 0;
+                
+                // Determine which axis the boundary is on
+                if (diff.x != 0) // X-axis boundary
+                {
+                    int xA = diff.x > 0 ? pointsPerAxis - 1 : 0;
+                    int xB = diff.x > 0 ? 0 : pointsPerAxis - 1;
+                    
+                    for (int y = 0; y < pointsPerAxis; y++)
+                    for (int z = 0; z < pointsPerAxis; z++)
+                    {
+                        int idxA = xA + pointsPerAxis * (y + pointsPerAxis * z);
+                        int idxB = xB + pointsPerAxis * (y + pointsPerAxis * z);
+                        
+                        if (idxA >= 0 && idxA < dataA.DensityPoints.Length &&
+                            idxB >= 0 && idxB < dataB.DensityPoints.Length)
+                        {
+                            float densityA = dataA.DensityPoints[idxA].density;
+                            float densityB = dataB.DensityPoints[idxB].density;
+                            float avg = (densityA + densityB) / 2f;
+                            
+                            // Set both to average
+                            var pointA = dataA.DensityPoints[idxA];
+                            dataA.SetDensityPoint(idxA, new DensityPoint(pointA.position, avg));
+                            
+                            var pointB = dataB.DensityPoints[idxB];
+                            dataB.SetDensityPoint(idxB, new DensityPoint(pointB.position, avg));
+                            
+                            pointsSynced++;
+                        }
+                    }
+                }
+                else if (diff.y != 0) // Y-axis boundary
+                {
+                    int yA = diff.y > 0 ? pointsPerAxis - 1 : 0;
+                    int yB = diff.y > 0 ? 0 : pointsPerAxis - 1;
+                    
+                    for (int x = 0; x < pointsPerAxis; x++)
+                    for (int z = 0; z < pointsPerAxis; z++)
+                    {
+                        int idxA = x + pointsPerAxis * (yA + pointsPerAxis * z);
+                        int idxB = x + pointsPerAxis * (yB + pointsPerAxis * z);
+                        
+                        if (idxA >= 0 && idxA < dataA.DensityPoints.Length &&
+                            idxB >= 0 && idxB < dataB.DensityPoints.Length)
+                        {
+                            float densityA = dataA.DensityPoints[idxA].density;
+                            float densityB = dataB.DensityPoints[idxB].density;
+                            float avg = (densityA + densityB) / 2f;
+                            
+                            var pointA = dataA.DensityPoints[idxA];
+                            dataA.SetDensityPoint(idxA, new DensityPoint(pointA.position, avg));
+                            
+                            var pointB = dataB.DensityPoints[idxB];
+                            dataB.SetDensityPoint(idxB, new DensityPoint(pointB.position, avg));
+                            
+                            pointsSynced++;
+                        }
+                    }
+                }
+                else if (diff.z != 0) // Z-axis boundary
+                {
+                    int zA = diff.z > 0 ? pointsPerAxis - 1 : 0;
+                    int zB = diff.z > 0 ? 0 : pointsPerAxis - 1;
+                    
+                    for (int x = 0; x < pointsPerAxis; x++)
+                    for (int y = 0; y < pointsPerAxis; y++)
+                    {
+                        int idxA = x + pointsPerAxis * (y + pointsPerAxis * zA);
+                        int idxB = x + pointsPerAxis * (y + pointsPerAxis * zB);
+                        
+                        if (idxA >= 0 && idxA < dataA.DensityPoints.Length &&
+                            idxB >= 0 && idxB < dataB.DensityPoints.Length)
+                        {
+                            float densityA = dataA.DensityPoints[idxA].density;
+                            float densityB = dataB.DensityPoints[idxB].density;
+                            float avg = (densityA + densityB) / 2f;
+                            
+                            var pointA = dataA.DensityPoints[idxA];
+                            dataA.SetDensityPoint(idxA, new DensityPoint(pointA.position, avg));
+                            
+                            var pointB = dataB.DensityPoints[idxB];
+                            dataB.SetDensityPoint(idxB, new DensityPoint(pointB.position, avg));
+                            
+                            pointsSynced++;
+                        }
+                    }
+                }
+                
+                if (pointsSynced > 0)
+                {
+                    boundariesSynced++;
+                    Debug.Log($"[BoundarySync] Synced {pointsSynced} density points between {coordA} and {coordB}");
+                }
+            }
+        }
+        
+        if (boundariesSynced > 0)
+        {
+            Debug.Log($"[BoundarySync] Synchronized {boundariesSynced} boundaries in batch of {batch.Count} chunks");
+        }
+    }
+    
     private void ProcessMeshUpdates()
     {
         if (chunksNeedingMeshUpdate == null || chunksNeedingMeshUpdate.Count == 0) return;
@@ -4890,6 +5024,10 @@ public class World : MonoBehaviour
             // If entire batch fits, process it
             if (batch.Count <= remainingBudget)
             {
+                // CRITICAL FIX: Synchronize boundary density between neighbors BEFORE mesh generation
+                // This prevents cracks by ensuring matching density at shared boundaries
+                SyncBoundaryDensityInBatch(batch);
+                
                 foreach (var batchChunk in batch)
                 {
                     // CRITICAL FIX: Pass fullMesh=true to ensure the mesh actually regenerates from density data
